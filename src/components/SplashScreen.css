@@ -1,0 +1,84 @@
+.splash-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: #1C1C1C;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.splash-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding-left: 40px; /* Left padding as requested */
+}
+
+.logo-container {
+  opacity: 0;
+  transform: scale(0.8);
+  transition: all 0.6s ease-out;
+}
+
+.logo-container.visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.logo {
+  height: 80px;
+  width: auto;
+  object-fit: contain;
+}
+
+.app-name {
+  font-size: 32px;
+  font-weight: 700;
+  color: #F5F5F5;
+  opacity: 0;
+  transform: translateY(20px);
+  transition: all 0.6s ease-out;
+  letter-spacing: 0.5px;
+}
+
+.app-name.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+  .splash-content {
+    padding-left: 20px;
+    gap: 16px;
+  }
+  
+  .logo {
+    height: 60px;
+  }
+  
+  .app-name {
+    font-size: 28px;
+  }
+}
+
+@media (max-width: 480px) {
+  .splash-content {
+    padding-left: 16px;
+    gap: 12px;
+  }
+  
+  .logo {
+    height: 50px;
+  }
+  
+  .app-name {
+    font-size: 24px;
+  }
+}
+

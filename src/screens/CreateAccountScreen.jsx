@@ -101,6 +101,7 @@ const CreateAccountScreen = ({ navigation }) => {
           data: {
             name: formData.name,
           },
+          emailRedirectTo: 'lockerroom://auth/callback',
         },
       });
 

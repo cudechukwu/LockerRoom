@@ -179,7 +179,7 @@ const ViewProfileCard = ({
       </View>
     </View>
   );
-
+212
   const renderStaffProfile = () => (
     <View style={styles.heroSection}>
       {/* Large Profile Photo - Centered */}

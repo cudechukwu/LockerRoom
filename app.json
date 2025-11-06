@@ -8,13 +8,18 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "sdkVersion": "54.0.0",
+    "scheme": "lockerroom",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.cudechukwu.LockerRoomtemp",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {

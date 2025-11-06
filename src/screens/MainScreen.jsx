@@ -18,7 +18,7 @@ const MainScreen = ({ navigation }) => {
   const handleSignOut = async () => {
     try {
       await supabase.auth.signOut();
-      navigation.navigate('VideoCover');
+      // Navigation is handled automatically in App.js via onAuthStateChange
     } catch (error) {
       console.error('Error signing out:', error);
     }

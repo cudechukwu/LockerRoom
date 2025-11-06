@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { AppState } from 'react-native';
+import * as Linking from 'expo-linking';
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 // Temporarily disable persistence to fix import issue
 // import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
@@ -50,6 +51,7 @@ const queryClient = new QueryClient({
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
+  const navigationRef = useRef(null);
 
   useEffect(() => {
     // AppState listener for background refresh
@@ -70,11 +72,76 @@ export default function App() {
     });
 
     // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      const newUser = session?.user ?? null;
+      setUser(newUser);
+      
+      // Automatically navigate on sign out
+      if (event === 'SIGNED_OUT' && navigationRef.current) {
+        navigationRef.current.reset({
+          index: 0,
+          routes: [{ name: 'VideoCover' }],
+        });
+      }
     });
 
-    return () => subscription.unsubscribe();
+    // Handle deep links for email confirmation
+    const handleDeepLink = async (event) => {
+      const url = event.url || event;
+      
+      // Check if this is an auth callback
+      if (url.includes('auth/callback')) {
+        try {
+          // Parse the URL - Supabase email confirmation uses hash fragments
+          // Format: lockerroom://auth/callback#access_token=...&refresh_token=...
+          if (url.includes('#')) {
+            const hashParams = url.split('#')[1];
+            const params = new URLSearchParams(hashParams);
+            const accessToken = params.get('access_token');
+            const refreshToken = params.get('refresh_token');
+            
+            if (accessToken && refreshToken) {
+              const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+                access_token: accessToken,
+                refresh_token: refreshToken,
+              });
+              
+              if (sessionError) {
+                console.error('Error setting session:', sessionError);
+              } else if (sessionData?.user) {
+                console.log('User signed in via email confirmation!');
+                // The onAuthStateChange listener will update the user state automatically
+              }
+            }
+          } else if (url.includes('code=')) {
+            // Handle PKCE flow with code parameter
+            const { data, error } = await supabase.auth.exchangeCodeForSession(url);
+            if (error) {
+              console.error('Error exchanging code for session:', error);
+            } else if (data?.user) {
+              console.log('User signed in via email confirmation!');
+            }
+          }
+        } catch (error) {
+          console.error('Deep link error:', error);
+        }
+      }
+    };
+
+    // Check for initial URL (app opened via deep link)
+    Linking.getInitialURL().then((url) => {
+      if (url) {
+        handleDeepLink(url);
+      }
+    });
+
+    // Listen for deep links while app is running
+    const linkingSubscription = Linking.addEventListener('url', handleDeepLink);
+
+    return () => {
+      subscription.unsubscribe();
+      linkingSubscription.remove();
+    };
   }, []);
 
   if (isLoading) {
@@ -82,9 +149,9 @@ export default function App() {
   }
 
   return (
-    <QueryClientProvider client={queryClient}>
+      <QueryClientProvider client={queryClient}>
       <NotificationProvider>
-        <NavigationContainer>
+        <NavigationContainer ref={navigationRef}>
           <Stack.Navigator
             screenOptions={{
               headerShown: false,

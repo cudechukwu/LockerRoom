@@ -4,7 +4,38 @@ import 'react-native-url-polyfill/auto';
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://cpzpwfiaclicrsxpcmmi.supabase.co';
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNwenB3ZmlhY2xpY3JzeHBjbW1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY2MzkzNDQsImV4cCI6MjA3MjIxNTM0NH0.Oa-yH0a-GEgHdXErT-5v7uQhgm9Hho1A_F3PrO0HaoU';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  realtime: {
+    params: {
+      eventsPerSecond: 10,
+    },
+  },
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+});
+
+// Test Supabase connection on import (development only)
+if (__DEV__) {
+  console.log('🔌 Supabase client initialized:', {
+    url: supabaseUrl ? `${supabaseUrl.substring(0, 30)}...` : 'MISSING',
+    hasKey: !!supabaseAnonKey,
+  });
+  
+  // Quick connectivity test
+  supabase.from('teams').select('id').limit(1)
+    .then(({ error }) => {
+      if (error) {
+        console.error('❌ Supabase connection test failed:', error.message);
+      } else {
+        console.log('✅ Supabase connection test passed');
+      }
+    })
+    .catch((err) => {
+      console.error('❌ Supabase connection test error:', err);
+    });
+}
 
 // Database table names
 export const TABLES = {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import {
   View,
   Text,
@@ -6,27 +6,22 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
-  Dimensions,
   StyleSheet,
   SafeAreaView,
   Image,
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  ImageBackground,
 } from 'react-native';
-import { Asset } from 'expo-asset';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
-import { getFontFamily, getFontWeight, getFontSize } from '../constants/fonts';
+import { getFontWeight, getFontSize } from '../constants/fonts';
 import { supabase } from '../lib/supabase';
-
-const { width, height } = Dimensions.get('window');
-const isTablet = width >= 768;
+import { ensureUserProfile } from '../lib/onboarding';
+import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
 
 const CreateAccountScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
   const [formData, setFormData] = useState({
@@ -34,13 +29,9 @@ const CreateAccountScreen = ({ navigation }) => {
     password: '',
     name: '',
   });
+  const { refreshBootstrap } = useContext(AppBootstrapContext);
 
   useEffect(() => {
-    // Preload the logo image to prevent flash
-    Asset.loadAsync(require('../../assets/LockerRoom.png')).then(() => {
-      setImageLoaded(true);
-    });
-
     // Test Supabase connection
     const testConnection = async () => {
       try {
@@ -108,18 +99,69 @@ const CreateAccountScreen = ({ navigation }) => {
       if (error) throw error;
 
       if (data.user) {
-        // Check if session is established before navigating
+        const newUser = data.user;
+        console.log('✅ User created:', newUser.id);
+        console.log('📧 Email confirmation required:', newUser.email_confirmed_at === null);
+
+        try {
+          await ensureUserProfile(newUser, formData.name);
+          console.log('✅ ensureUserProfile completed');
+        } catch (seedError) {
+          console.error('⚠️ Failed to seed user profile:', seedError);
+        }
+        
+        // Check if session is established (email confirmation disabled) or user needs to confirm
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
-          navigation.navigate('TeamSetup');
+          console.log('✅ Session established immediately - refreshing bootstrap');
+          const targetRoute = await refreshBootstrap({ showSpinner: false });
+
+          if (targetRoute) {
+            navigation.reset({
+              index: 0,
+              routes: [{ name: targetRoute }],
+            });
+          }
+        } else if (data.user.email_confirmed_at === null) {
+          // Email confirmation is required
+          console.log('⚠️ Email confirmation required');
+          Alert.alert(
+            'Check Your Email',
+            'We sent a confirmation link to your email. Please click the link to verify your account, then sign in.',
+            [
+              {
+                text: 'OK',
+                onPress: () => navigation.navigate('SignIn'),
+              },
+            ]
+          );
         } else {
           // If no session yet, wait a bit and try again
+          console.log('⏳ Waiting for session...');
           setTimeout(async () => {
             const { data: { session: retrySession } } = await supabase.auth.getSession();
             if (retrySession) {
-              navigation.navigate('TeamSetup');
+              console.log('✅ Session established after wait - refreshing bootstrap');
+          const targetRoute = await refreshBootstrap({ showSpinner: false });
+
+          if (targetRoute) {
+            navigation.reset({
+              index: 0,
+              routes: [{ name: targetRoute }],
+            });
+          }
             } else {
-              Alert.alert('Error', 'Failed to establish session. Please try again.');
+              console.error('❌ Session not established after wait');
+              Alert.alert(
+                'Account Created',
+                'Your account has been created. Please check your email to confirm your account, then sign in.',
+                [
+                  {
+                    text: 'OK',
+                    onPress: () => navigation.navigate('SignIn'),
+                  },
+                ]
+              );
             }
           }, 2000);
         }
@@ -165,61 +207,46 @@ const CreateAccountScreen = ({ navigation }) => {
   };
 
   return (
-    <ImageBackground 
-      source={require('../../assets/whitesection.png')}
-      style={styles.container}
-      resizeMode="cover"
-    >
-      <View style={styles.overlay} />
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.header}>
-          <TouchableOpacity 
-            onPress={() => navigation.goBack()} 
-            style={styles.backButton}
-          >
-            <Text style={styles.backButtonText}>←</Text>
-          </TouchableOpacity>
-        </View>
-
         <KeyboardAvoidingView 
-          style={styles.keyboardAvoidingView}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
         >
         <ScrollView
-          style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
-          bounces={true}
-          alwaysBounceVertical={true}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.content}>
-        <View style={styles.brandSection}>
-          {imageLoaded && (
-            <Image
-              source={require('../../assets/LockerRoom.png')}
-              style={styles.lockerLogo}
-              resizeMode="contain"
-            />
-          )}
-          <Text style={styles.appName}>LockerRoom</Text>
-          <Text style={styles.tagline}>Where teams connect</Text>
-        </View>
+          <View style={styles.brandSection}>
+              <Image
+                source={require('../../assets/LockerRoom.png')}
+                style={styles.brandLogo}
+                resizeMode="contain"
+              />
+            <View style={styles.brandText}>
+              <Text style={styles.brandTitle}>Create your account</Text>
+              <Text style={styles.brandSubtitle}>
+                Join your squad and keep every play in one place.
+              </Text>
+            </View>
+          </View>
 
-        <View style={styles.formSection}>
+          <View style={styles.formArea}>
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Name</Text>
+              <Text style={styles.label}>Full name</Text>
             <TextInput
               style={[
                 styles.textInput,
-                focusedField === 'name' && styles.textInputFocused
+                  focusedField === 'name' && styles.textInputFocused,
               ]}
               value={formData.name}
               onChangeText={(text) => updateFormData('name', text)}
               onFocus={() => setFocusedField('name')}
               onBlur={() => setFocusedField(null)}
               autoCapitalize="words"
+                placeholder="Jordan Reed"
+                placeholderTextColor={COLORS.TEXT_MUTED}
             />
           </View>
 
@@ -228,7 +255,7 @@ const CreateAccountScreen = ({ navigation }) => {
             <TextInput
               style={[
                 styles.textInput,
-                focusedField === 'email' && styles.textInputFocused
+                  focusedField === 'email' && styles.textInputFocused,
               ]}
               value={formData.email}
               onChangeText={(text) => updateFormData('email', text)}
@@ -236,15 +263,19 @@ const CreateAccountScreen = ({ navigation }) => {
               onBlur={() => setFocusedField(null)}
               keyboardType="email-address"
               autoCapitalize="none"
+                placeholder="you@example.com"
+                placeholderTextColor={COLORS.TEXT_MUTED}
             />
           </View>
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Password</Text>
-            <View style={[
+              <View
+                style={[
               styles.passwordContainer,
-              focusedField === 'password' && styles.passwordContainerFocused
-            ]}>
+                  focusedField === 'password' && styles.passwordContainerFocused,
+                ]}
+              >
               <TextInput
                 style={styles.passwordInput}
                 value={formData.password}
@@ -253,10 +284,14 @@ const CreateAccountScreen = ({ navigation }) => {
                 onBlur={() => setFocusedField(null)}
                 secureTextEntry={!showPassword}
                 returnKeyType="done"
+                  placeholder="Minimum 6 characters"
+                  placeholderTextColor={COLORS.TEXT_MUTED}
               />
               <TouchableOpacity
                 style={styles.eyeButton}
                 onPress={() => setShowPassword(!showPassword)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Toggle password visibility"
               >
                 <Ionicons
                   name={showPassword ? 'eye-off' : 'eye'}
@@ -267,8 +302,6 @@ const CreateAccountScreen = ({ navigation }) => {
             </View>
           </View>
 
-
-
           <TouchableOpacity
             style={[styles.primaryButton, loading && styles.primaryButtonDisabled]}
             onPress={handleCreateAccount}
@@ -277,160 +310,125 @@ const CreateAccountScreen = ({ navigation }) => {
             {loading ? (
               <ActivityIndicator color={COLORS.WHITE} />
             ) : (
-              <Text style={styles.primaryButtonText}>Continue</Text>
+                <Text style={styles.primaryButtonText}>Create account</Text>
             )}
           </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.secondaryAction}
+              onPress={() => navigation.navigate('SignIn')}
+            >
+              <Text style={styles.secondaryText}>
+                Already have an account? <Text style={styles.secondaryTextBold}>Sign in</Text>
+              </Text>
+            </TouchableOpacity>
+          </View>
 
           <Text style={styles.legalText}>
             By creating an account, you agree to our{' '}
             <Text style={styles.link}>Terms of Service</Text> and{' '}
             <Text style={styles.link}>Privacy Policy</Text>.
           </Text>
-        </View>
-          </View>
         </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
-    </ImageBackground>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
   safeArea: {
     flex: 1,
-    zIndex: 2,
+    backgroundColor: COLORS.WHITE,
   },
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    zIndex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: isTablet ? 24 : 20,
-    paddingVertical: 16,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F3F4F6',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  backButtonText: {
-    color: COLORS.PRIMARY_BLACK,
-    fontSize: 20,
-    fontWeight: '600',
-  },
-  keyboardAvoidingView: {
-    flex: 1,
-  },
-  scrollView: {
+  flex: {
     flex: 1,
   },
   scrollContent: {
     flexGrow: 1,
-    paddingBottom: 40,
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: isTablet ? 32 : 28,
+    paddingHorizontal: 24,
+    paddingVertical: 32,
   },
   brandSection: {
-    alignItems: 'center',
-    marginTop: isTablet ? 24 : 20,
-    marginBottom: isTablet ? 48 : 36,
+    gap: 20,
+    marginBottom: 28,
+    paddingTop: 32,
   },
-  lockerLogo: {
-    width: isTablet ? 80 : 60,
-    height: isTablet ? 80 : 60,
-    marginBottom: 16,
-    borderRadius: isTablet ? 16 : 12,
+  brandLogo: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    alignSelf: 'flex-start',
   },
-  appName: {
-    fontSize: getFontSize(isTablet ? '3XL' : '2XL'),
+  brandText: {
+    gap: 6,
+  },
+  brandTitle: {
+    fontSize: getFontSize('2XL'),
     fontWeight: getFontWeight('BOLD'),
     color: COLORS.PRIMARY_BLACK,
-    letterSpacing: 1.5,
-    marginBottom: 8,
-    fontFamily: 'Georgia',
   },
-  tagline: {
-    fontSize: getFontSize(isTablet ? 'BASE' : 'SM'),
+  brandSubtitle: {
+    fontSize: getFontSize('SM'),
     color: COLORS.MEDIUM_GRAY,
-    fontStyle: 'italic',
-    fontFamily: 'Georgia',
+    lineHeight: 20,
   },
-  formSection: {
-    flex: 1,
+  formArea: {
+    gap: 20,
   },
   inputGroup: {
-    marginBottom: 15,
+    gap: 6,
   },
   label: {
-    fontSize: getFontSize('BASE'),
-    fontWeight: getFontWeight('MEDIUM'),
+    fontSize: getFontSize('XS'),
+    fontWeight: getFontWeight('SEMIBOLD'),
     color: COLORS.PRIMARY_BLACK,
-    marginBottom: 5,
   },
   textInput: {
-    backgroundColor: 'transparent',
-    borderRadius: 8,
-    paddingVertical: 14,
+    backgroundColor: '#F4F5F7',
+    borderRadius: 10,
+    paddingVertical: 12,
     paddingHorizontal: 16,
+    fontSize: getFontSize('SM'),
     color: COLORS.PRIMARY_BLACK,
-    fontSize: getFontSize('BASE'),
     borderWidth: 1,
-    borderColor: '#D0D0D0',
-    height: 48,
+    borderColor: '#EAEBF0',
   },
   textInputFocused: {
     borderColor: COLORS.PRIMARY_BLACK,
-    borderWidth: 2,
+    backgroundColor: COLORS.WHITE,
   },
   passwordContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'transparent',
-    borderRadius: 8,
+    borderRadius: 12,
+    backgroundColor: '#F4F5F7',
     borderWidth: 1,
-    borderColor: '#D0D0D0',
-    height: 48,
+    borderColor: '#EAEBF0',
   },
   passwordContainerFocused: {
     borderColor: COLORS.PRIMARY_BLACK,
-    borderWidth: 2,
+    backgroundColor: COLORS.WHITE,
   },
   passwordInput: {
     flex: 1,
-    paddingVertical: 14,
+    paddingVertical: 12,
     paddingHorizontal: 16,
+    fontSize: getFontSize('SM'),
     color: COLORS.PRIMARY_BLACK,
-    fontSize: getFontSize('BASE'),
   },
   eyeButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     justifyContent: 'center',
     alignItems: 'center',
   },
-
   primaryButton: {
-    backgroundColor: COLORS.PRIMARY_BLACK,
-    borderRadius: 8,
+    marginTop: 12,
     paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: COLORS.PRIMARY_BLACK,
     alignItems: 'center',
-    marginBottom: 32,
-    height: 48,
+    justifyContent: 'center',
   },
   primaryButtonDisabled: {
     opacity: 0.6,
@@ -440,12 +438,24 @@ const styles = StyleSheet.create({
     fontSize: getFontSize('BASE'),
     fontWeight: getFontWeight('SEMIBOLD'),
   },
-  legalText: {
+  secondaryAction: {
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  secondaryText: {
     fontSize: getFontSize('SM'),
     color: COLORS.MEDIUM_GRAY,
+  },
+  secondaryTextBold: {
+    color: COLORS.PRIMARY_BLACK,
+    fontWeight: getFontWeight('SEMIBOLD'),
+  },
+  legalText: {
+    fontSize: getFontSize('XS'),
+    color: COLORS.MEDIUM_GRAY,
     textAlign: 'center',
-    lineHeight: 20,
-    paddingHorizontal: 16,
+    lineHeight: 18,
+    marginTop: 24,
   },
   link: {
     textDecorationLine: 'underline',

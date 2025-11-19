@@ -86,7 +86,7 @@ const AnimationControls = ({
           onPress={handleRestart}
           activeOpacity={0.7}
         >
-          <Ionicons name="refresh" size={20} color="#6B7280" />
+          <Ionicons name="refresh" size={18} color="#6B7280" />
         </TouchableOpacity>
         
         {/* Play/Pause Button */}
@@ -102,7 +102,7 @@ const AnimationControls = ({
         >
           <Ionicons 
             name={isPlaying ? "pause" : "play"} 
-            size={24} 
+            size={20} 
             color={hasRoutes ? "#FFFFFF" : "#9CA3AF"} 
           />
         </TouchableOpacity>
@@ -113,7 +113,7 @@ const AnimationControls = ({
           onPress={() => setShowSpeedOptions(!showSpeedOptions)}
           activeOpacity={0.7}
         >
-          <Ionicons name="speedometer" size={20} color="#6B7280" />
+          <Ionicons name="speedometer" size={18} color="#6B7280" />
           <Text style={styles.speedText}>{currentSpeed}x</Text>
         </TouchableOpacity>
       </View>
@@ -173,51 +173,51 @@ const AnimationControls = ({
 const styles = StyleSheet.create({
   container: {
     backgroundColor: 'transparent',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    paddingBottom: 30,
-    marginTop: -8,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 24,
+    marginTop: 4,
   },
   mainControls: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 16,
+    gap: 12,
   },
   controlButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: '#2A2A2A',
     justifyContent: 'center',
     alignItems: 'center',
   },
   playButton: {
     backgroundColor: '#2A2A2A',
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
   },
   speedText: {
-    fontSize: 10,
+    fontSize: 9,
     color: '#6B7280',
-    marginTop: 2,
+    marginTop: 1,
   },
   progressContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
-    gap: 8,
+    marginTop: 6,
+    gap: 6,
   },
   timeText: {
-    fontSize: 12,
+    fontSize: 10,
     color: '#6B7280',
-    minWidth: 40,
+    minWidth: 32,
     textAlign: 'center',
   },
   progressBar: {
     flex: 1,
-    height: 4,
+    height: 3,
     backgroundColor: '#E5E7EB',
     borderRadius: 2,
     overflow: 'hidden',

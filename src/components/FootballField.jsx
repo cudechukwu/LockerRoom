@@ -3,22 +3,49 @@ import { View, StyleSheet, Dimensions, TouchableOpacity } from 'react-native';
 import Svg, { Rect, Line, Circle, Text as SvgText } from 'react-native-svg';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const CARD_MARGIN = 40; // Distance from left and right edges
+
+// Calculate responsive constants based on screen size (all percentage-based)
+const CARD_MARGIN = SCREEN_WIDTH * 0.015; // 1.5% of screen width for minimal padding
 const CARD_WIDTH = SCREEN_WIDTH - (CARD_MARGIN * 2); // Card width with margins
-const CARD_PADDING = 16; // Card internal padding
-const FIELD_HEIGHT = SCREEN_HEIGHT * 0.50; // Use 50% of screen height
-const FIELD_WIDTH = Math.min(SCREEN_WIDTH * 0.8, FIELD_HEIGHT * 0.7); // Wider field, max 80% of screen width
-const FIELD_LEFT_OFFSET = CARD_MARGIN * 0.3; // Smaller offset for better balance
+const CARD_PADDING = SCREEN_WIDTH * 0.01; // 1% of screen width for minimal padding
+const FIELD_LEFT_OFFSET = CARD_MARGIN; // Minimal offset for better balance
 
-// Calculate field dimensions in pixels
+// Field dimensions constants
+// Increase the yard representation to reduce spacing between lines (zoom out effect)
 const fieldWidthYards = 100;
-const fieldHeightYards = 53.3;
-const yardsToPixels = FIELD_HEIGHT / fieldHeightYards;
-const fieldWidthPixels = fieldWidthYards * yardsToPixels;
-const fieldHeightPixels = FIELD_HEIGHT;
+const fieldHeightYards = 80; // Increased from 53.3 to 80 to show more yards, reducing line spacing
 
-const FootballField = ({ children, onFieldPress, touchOverlayDimensions }) => {
-  // Field dimensions are now calculated outside the component
+const FootballField = ({ children, onFieldPress, touchOverlayDimensions, fieldHeight, fieldWidth }) => {
+  // Use provided field dimensions or calculate to fill available space
+  // Field should extend from header all the way to bottom of screen
+  // Palette overlays on top, so we don't subtract controls height
+  const safeFieldHeight = fieldHeight || (() => {
+    // Calculate: screen height minus header and safe areas only
+    const headerHeight = SCREEN_HEIGHT * 0.10; // ~10% for header
+    const safeAreaBuffer = SCREEN_HEIGHT * 0.01; // ~1% for safe areas (minimal)
+    const availableHeight = SCREEN_HEIGHT - headerHeight - safeAreaBuffer;
+    return availableHeight; // Use 100% of available space - field extends to bottom of screen
+  })();
+  
+  const safeFieldWidth = fieldWidth || Math.min(SCREEN_WIDTH * 0.96, safeFieldHeight * 0.85);
+  
+  // Calculate field dimensions in pixels
+  // With more yards represented, yardsToPixels will be smaller, reducing spacing between lines
+  const yardsToPixels = safeFieldHeight / fieldHeightYards;
+  const fieldWidthPixels = fieldWidthYards * yardsToPixels;
+  const fieldHeightPixels = safeFieldHeight;
+  
+  // Calculate responsive stroke widths and font sizes
+  // Use fixed, proportional stroke widths that look good on larger fields
+  // Lines should appear thin and clean, not thick and zoomed
+  const hashMarkStrokeWidth = 0.8;
+  const yardLineStrokeWidth = 1.5;
+  const goalLineStrokeWidth = 1.5;
+  const centerLineStrokeWidth = 1.5;
+  
+  // Font size scales slightly with field size but stays readable
+  const fontSize = Math.max(10, Math.min(14, safeFieldHeight * 0.02));
+  const dashArray = "2,2";
   
   // Hash marks every 5 yards (now vertical)
   const hashMarks = [];
@@ -32,16 +59,18 @@ const FootballField = ({ children, onFieldPress, touchOverlayDimensions }) => {
         x2={fieldWidthPixels * 0.8}
         y2={y}
         stroke="#FFFFFF"
-        strokeWidth={1}
-        strokeDasharray="2,2"
+        strokeWidth={hashMarkStrokeWidth}
+        strokeDasharray={dashArray}
       />
     );
   }
   
-  // Yard lines every 10 yards (now vertical)
+  // Yard lines every 5 yards (now vertical) - reduced spacing between lines
   const yardLines = [];
-  for (let i = 0; i <= fieldHeightYards; i += 10) {
+  for (let i = 0; i <= fieldHeightYards; i += 5) {
     const y = i * yardsToPixels;
+    // Make every 10-yard line slightly thicker, 5-yard lines thinner
+    const isTenYardLine = i % 10 === 0;
     yardLines.push(
       <Line
         key={`yard-${i}`}
@@ -50,12 +79,13 @@ const FootballField = ({ children, onFieldPress, touchOverlayDimensions }) => {
         x2={fieldWidthPixels}
         y2={y}
         stroke="#FFFFFF"
-        strokeWidth={2}
+        strokeWidth={isTenYardLine ? yardLineStrokeWidth : hashMarkStrokeWidth}
+        strokeDasharray={isTenYardLine ? "0" : dashArray}
       />
     );
   }
   
-  // Yard numbers (now vertical)
+  // Yard numbers (now vertical) - still show every 10 yards
   const yardNumbers = [];
   for (let i = 0; i <= fieldHeightYards; i += 10) {
     const y = i * yardsToPixels;
@@ -65,7 +95,7 @@ const FootballField = ({ children, onFieldPress, touchOverlayDimensions }) => {
         key={`number-${i}`}
         x={fieldWidthPixels * 0.15}
         y={y}
-        fontSize="12"
+        fontSize={fontSize}
         fill="#FFFFFF"
         textAnchor="middle"
         transform={`rotate(-90 ${fieldWidthPixels * 0.15} ${y})`}
@@ -84,7 +114,7 @@ const FootballField = ({ children, onFieldPress, touchOverlayDimensions }) => {
       x2={fieldWidthPixels}
       y2={0}
       stroke="#CCCCCC"
-      strokeWidth={2}
+      strokeWidth={goalLineStrokeWidth}
     />,
     <Line
       key="goal-bottom"
@@ -93,7 +123,7 @@ const FootballField = ({ children, onFieldPress, touchOverlayDimensions }) => {
       x2={fieldWidthPixels}
       y2={fieldHeightYards * yardsToPixels}
       stroke="#CCCCCC"
-      strokeWidth={2}
+      strokeWidth={goalLineStrokeWidth}
     />
   ];
   
@@ -101,11 +131,11 @@ const FootballField = ({ children, onFieldPress, touchOverlayDimensions }) => {
 
   return (
     <View style={styles.container}>
-      <View style={styles.card}>
-        <View style={styles.fieldContainer}>
+      <View style={[styles.card, { minHeight: fieldHeightPixels + (CARD_PADDING * 2) }]}>
+        <View style={[styles.fieldContainer, { width: fieldWidthPixels, height: fieldHeightPixels }]}>
           <Svg
             width={fieldWidthPixels}
-            height={FIELD_HEIGHT}
+            height={fieldHeightPixels}
             style={styles.field}
           >
             {/* Yard lines */}
@@ -127,14 +157,14 @@ const FootballField = ({ children, onFieldPress, touchOverlayDimensions }) => {
               x2={fieldWidthPixels}
               y2={50 * yardsToPixels}
               stroke="#FFFFFF"
-              strokeWidth={2}
+              strokeWidth={centerLineStrokeWidth}
             />
             
             {/* 50-yard line text */}
             <SvgText
               x={fieldWidthPixels * 0.5}
               y={50 * yardsToPixels}
-              fontSize="14"
+              fontSize={fontSize * 1.2}
               fill="#FFFFFF"
               textAnchor="middle"
             >
@@ -183,13 +213,10 @@ const styles = StyleSheet.create({
     elevation: 5,
     alignItems: 'center', // Center alignment for better balance
     justifyContent: 'center',
-    minHeight: FIELD_HEIGHT + (CARD_PADDING * 2),
     overflow: 'hidden', // This clips content to card boundaries
     marginLeft: FIELD_LEFT_OFFSET, // Small offset for better balance
   },
   fieldContainer: {
-    width: fieldWidthPixels,
-    height: fieldHeightPixels,
     borderRadius: 12, // Slightly smaller radius than card
     overflow: 'hidden', // This clips the SVG content
   },

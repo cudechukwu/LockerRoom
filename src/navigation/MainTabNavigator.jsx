@@ -29,13 +29,14 @@ const BlurTabBar = (props) => {
   
   return (
     <BlurView
-      intensity={80}
-      tint="light"
+      intensity={60}
+      tint="dark"
       style={{
         position: 'absolute',
         bottom: 0,
         left: 0,
         right: 0,
+        backgroundColor: '#0C0C0C', // Light purple-black overlay
       }}
     >
       <View style={{ paddingBottom: Math.max(insets.bottom - 18, 0) }}>

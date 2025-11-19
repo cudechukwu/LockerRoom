@@ -1,43 +1,62 @@
+import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '../lib/supabase';
+import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
+import { TeamContext } from '../contexts/TeamContext';
 import { queryKeys } from './queryKeys';
 
 /**
- * Hook to get current user and their team information
- * This replaces the auth + team lookup logic from loadTeamData
+ * Returns the active team context for the authenticated user.
+ * Backed by React Query so existing consumers keep the same API shape.
  */
 export function useAuthTeam() {
-  return useQuery({
-    queryKey: queryKeys.authTeam(),
+  const { user, userTeams } = React.useContext(AppBootstrapContext);
+  const { activeTeamId } = React.useContext(TeamContext);
+
+  const query = useQuery({
+    queryKey: [...queryKeys.authTeam(), user?.id, activeTeamId],
+    enabled: !!user,
     queryFn: async () => {
-      // Get current user
-      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         throw new Error('NO_USER');
       }
 
-      // Get user's team
-      const { data: teamMember } = await supabase
-        .from('team_members')
-        .select('team_id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!teamMember) {
+      if (!activeTeamId) {
         throw new Error('NO_TEAM');
       }
 
-      return { 
-        userId: user.id, 
-        teamId: teamMember.team_id 
+      const team = userTeams?.find((membership) => membership.team_id === activeTeamId) || null;
+
+      return {
+        userId: user.id,
+        user,
+        teamId: activeTeamId,
+        team,
       };
     },
-    staleTime: 10 * 60 * 1000, // 10 minutes - auth/team rarely changes
-    retry: 1,
-    // Better error handling for predictable UX
-    onError: (error) => {
-      console.log('Auth/Team error:', error.message);
-      // Could trigger login redirect here if needed
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: (count, error) => {
+      if (!error?.message) {
+        return count < 1;
+      }
+      if (error.message.includes('NO_USER') || error.message.includes('NO_TEAM')) {
+        return false;
+      }
+      return count < 1;
     },
   });
+
+  React.useEffect(() => {
+    console.log('📊 useAuthTeam state:', {
+      hasUser: !!user,
+      activeTeamId,
+      isLoading: query.isLoading,
+      isFetching: query.isFetching,
+      isError: query.isError,
+      error: query.error?.message,
+      data: query.data ? { userId: query.data.userId, teamId: query.data.teamId } : null,
+    });
+  }, [user, activeTeamId, query.isLoading, query.isFetching, query.isError, query.data, query.error]);
+
+  return query;
 }

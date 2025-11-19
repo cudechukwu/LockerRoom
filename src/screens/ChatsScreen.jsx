@@ -11,11 +11,39 @@ const Stack = createStackNavigator();
 
 const ChatsScreen = () => {
   // Use React Query hook for team data (no more useFocusEffect needed!)
-  const { data: authData, isLoading, error } = useAuthTeam();
+  const { data: authData, isLoading, error, isFetching } = useAuthTeam();
   const teamId = authData?.teamId;
+  const userId = authData?.userId;
 
-  // Show loading state while team ID is being fetched
-  if (isLoading) {
+  // Debug logging
+  React.useEffect(() => {
+    console.log('💬 ChatsScreen state:', {
+      isLoading,
+      isFetching,
+      hasError: !!error,
+      errorMessage: error?.message,
+      hasData: !!authData,
+      teamId,
+      userId,
+    });
+  }, [isLoading, isFetching, error, authData, teamId, userId]);
+
+  // Add timeout for loading state
+  const [loadingTimeout, setLoadingTimeout] = React.useState(false);
+  React.useEffect(() => {
+    if (isLoading) {
+      const timeout = setTimeout(() => {
+        console.warn('⚠️ ChatsScreen: Loading timeout after 10 seconds');
+        setLoadingTimeout(true);
+      }, 10000);
+      return () => clearTimeout(timeout);
+    } else {
+      setLoadingTimeout(false);
+    }
+  }, [isLoading]);
+
+  // Show loading state while team ID is being fetched (but not if timed out)
+  if (isLoading && !loadingTimeout) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={COLORS.PRIMARY_BLACK} />
@@ -25,10 +53,18 @@ const ChatsScreen = () => {
   }
 
   // Show error state if team data failed to load
-  if (error) {
+  if (error || loadingTimeout) {
     return (
       <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Failed to load team data</Text>
+        <Text style={styles.errorText}>
+          {error?.message?.includes('NO_SESSION') || error?.message?.includes('NO_USER')
+            ? 'Session expired. Please sign in again.'
+            : error?.message?.includes('NO_TEAM')
+            ? 'You are not a member of any team.'
+            : loadingTimeout
+            ? 'Loading timed out. Please try again.'
+            : 'Failed to load team data'}
+        </Text>
       </View>
     );
   }

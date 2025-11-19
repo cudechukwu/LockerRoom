@@ -152,6 +152,7 @@ const RichMessageInput = ({
           // Android-specific improvements
           underlineColorAndroid="transparent"
           keyboardType="default"
+          keyboardAppearance="dark"
         />
 
         {/* Voice Button - Disabled for MVP */}
@@ -191,7 +192,7 @@ const RichMessageInput = ({
 const styles = StyleSheet.create({
   container: {
     backgroundColor: 'transparent',
-    paddingHorizontal: SCREEN_WIDTH * 0.001, // 0.5% of screen width (even closer to edges)
+    paddingHorizontal: SCREEN_WIDTH * 0.01, // 0.5% of screen width (even closer to edges)
     paddingTop: 12,
     paddingBottom: 4, // Reduced bottom padding to bring closer to screen bottom
     // Ensure no extra margins that could cause gaps

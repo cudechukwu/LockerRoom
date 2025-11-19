@@ -18,6 +18,8 @@ import { queryKeys } from './queryKeys';
 import { useAuthTeam } from './useAuthTeam';
 import { CALL_STATUS } from './useAgoraEngine';
 
+const DISABLE_CALL_REALTIME = true; // TODO: flip back to false once Realtime infra is stable
+
 /**
  * Simple debounce utility
  */
@@ -87,10 +89,12 @@ export function useCallSession(callSessionId, options = {}) {
   const isActiveRef = useRef(true);
   const lastHeartbeatRef = useRef(Date.now());
   const heartbeatBackoffRef = useRef(30000); // Start at 30s, adapts dynamically
+  const lastRealtimeTokenRef = useRef(null);
 
   // Local state for real-time updates
   const [participants, setParticipants] = useState([]);
   const [presenceMap, setPresenceMap] = useState({});
+  const presenceMapRef = useRef({});
 
   // Fetch call session data
   const {
@@ -142,7 +146,14 @@ export function useCallSession(callSessionId, options = {}) {
       }
     });
 
-    setPresenceMap(newPresenceMap);
+    // Only update if presenceMap actually changed (prevent infinite loops)
+    const presenceMapStr = JSON.stringify(newPresenceMap);
+    const prevPresenceMapStr = JSON.stringify(presenceMapRef.current);
+    
+    if (presenceMapStr !== prevPresenceMapStr) {
+      presenceMapRef.current = newPresenceMap;
+      setPresenceMap(newPresenceMap);
+    }
 
     // Update participants list based on presence (will be debounced below)
     if (callSession?.call_participants) {
@@ -171,18 +182,58 @@ export function useCallSession(callSessionId, options = {}) {
       return;
     }
 
+    if (DISABLE_CALL_REALTIME) {
+      if (__DEV__) {
+        console.warn('🛑 useCallSession: Realtime calling temporarily disabled');
+      }
+      return;
+    }
+
     if (!callSessionId || !currentUserId || !enabled) return;
 
     // Track component mount state
     isActiveRef.current = true;
 
     try {
+      // Ensure Realtime connection has current auth token before creating channel
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) {
+        console.error('❌ useCallSession.getSession error:', sessionError);
+        return;
+      }
+
+      const accessToken = session?.access_token;
+      if (!accessToken) {
+        console.warn('⚠️ useCallSession: no access token available for realtime channel');
+      } else if (lastRealtimeTokenRef.current !== accessToken) {
+        const setAuthFn =
+          typeof supabase.realtime.setAuth === 'function'
+            ? supabase.realtime.setAuth.bind(supabase.realtime)
+            : typeof supabase.realtime.setAuthToken === 'function'
+              ? supabase.realtime.setAuthToken.bind(supabase.realtime)
+              : null;
+
+        if (setAuthFn) {
+          try {
+            await setAuthFn(accessToken);
+            lastRealtimeTokenRef.current = accessToken;
+            console.log('🔑 useCallSession: realtime auth set before channel subscribe');
+          } catch (setAuthError) {
+            console.error('❌ useCallSession: failed to set realtime auth token', setAuthError);
+            return;
+          }
+        } else {
+          console.warn('⚠️ useCallSession: realtime auth setter not available on client');
+        }
+      }
+
       // Create Presence channel for call signaling
       const callChannel = supabase.channel(`call:${callSessionId}`, {
         config: {
           presence: {
             key: currentUserId,
           },
+          retry: true, // ✅ ensures auto-reconnect (prevents CLOSE event spam)
         },
       });
 
@@ -320,19 +371,28 @@ export function useCallSession(callSessionId, options = {}) {
         }
       }
 
-      if (subscribeStatus === 'SUBSCRIBED') {
-        // Track our presence
-        await callChannel.track({
-          user_id: currentUserId,
-          joined_at: new Date().toISOString(),
-          status: 'connected',
-        });
+      if (subscribeStatus !== 'SUBSCRIBED') {
+        // Add delay after final retry cleanup
+        await callChannel.unsubscribe().catch(() => {});
+        await supabase.removeChannel(callChannel).catch(() => {});
+        await new Promise(r => setTimeout(r, 300));
+        throw new Error('Failed to subscribe to call channel after 3 attempts');
+      }
 
-        // Initial presence sync
-        debouncedPresenceSync();
+      // Only set callChannelRef after successful subscription
+      callChannelRef.current = callChannel;
 
-        callChannelRef.current = callChannel;
-        onReconnect?.();
+      // Track our presence
+      await callChannel.track({
+        user_id: currentUserId,
+        joined_at: new Date().toISOString(),
+        status: 'connected',
+      });
+
+      // Initial presence sync
+      debouncedPresenceSync();
+
+      onReconnect?.();
 
         // Heartbeat loop with dynamic backoff (adapts to connection quality)
         const heartbeatLoop = async () => {
@@ -373,18 +433,6 @@ export function useCallSession(callSessionId, options = {}) {
         // Start heartbeat loop
         heartbeatLoop();
 
-      } else {
-        console.error('Failed to subscribe to call channel after retries');
-        onError?.(new Error('Failed to subscribe to call channel'));
-        // Clean up partial subscription
-        try {
-          await callChannel.unsubscribe();
-          await supabase.removeChannel(callChannel);
-        } catch (cleanupErr) {
-          console.error('Error cleaning up failed subscription:', cleanupErr);
-        }
-      }
-
     } catch (error) {
       console.error('Error subscribing to call session:', error);
       onError?.(error);
@@ -412,22 +460,26 @@ export function useCallSession(callSessionId, options = {}) {
     // Note: Heartbeat loop will exit automatically when isActiveRef.current becomes false
     // No need to clear interval since we're using a while loop
 
-    // Unsubscribe from channel
-    if (callChannelRef.current) {
-      try {
-        // Remove our presence before unsubscribing
-        await callChannelRef.current.untrack();
-        await callChannelRef.current.unsubscribe();
-        await supabase.removeChannel(callChannelRef.current);
-      } catch (error) {
-        console.error('Error unsubscribing from call channel:', error);
-      }
-      callChannelRef.current = null;
-    }
+    // Guard against double unsubscribe
+    if (!callChannelRef.current) return;
 
-    // Clear presence state
-    setPresenceMap({});
-    setParticipants([]);
+    const channel = callChannelRef.current;
+    callChannelRef.current = null; // Clear ref first to prevent double unsubscribe
+
+    try {
+      // Remove our presence before unsubscribing
+      await channel.untrack?.();
+      await channel.unsubscribe();
+      await supabase.removeChannel(channel);
+      // Small delay to prevent immediate reopen conflicts
+      await new Promise(r => setTimeout(r, 300));
+    } catch (error) {
+      console.error('Error unsubscribing from call channel:', error);
+    } finally {
+      // Clear presence state
+      setPresenceMap({});
+      setParticipants([]);
+    }
   }, []);
 
   // Set up subscription when call session is available
@@ -442,18 +494,21 @@ export function useCallSession(callSessionId, options = {}) {
   }, [callSession, currentUserId, enabled, subscribe, unsubscribe]);
 
   // Update participants when call session changes (with presence merge)
+  // Use useMemo to prevent infinite loops from presenceMap object reference changes
+  const participantsWithPresence = useMemo(() => {
+    if (!callSession?.call_participants) return [];
+    
+    return callSession.call_participants.map(p => ({
+      ...p,
+      is_present: presenceMap[p.user_id] !== undefined,
+      presence: presenceMap[p.user_id] || null,
+    }));
+  }, [callSession?.call_participants, presenceMap]);
+
   useEffect(() => {
     if (!isActiveRef.current) return;
-
-    if (callSession?.call_participants) {
-      const updatedParticipants = callSession.call_participants.map(p => ({
-        ...p,
-        is_present: presenceMap[p.user_id] !== undefined,
-        presence: presenceMap[p.user_id] || null,
-      }));
-      setParticipants(updatedParticipants);
-    }
-  }, [callSession, presenceMap]);
+    setParticipants(participantsWithPresence);
+  }, [participantsWithPresence]);
 
   return {
     // Call session data

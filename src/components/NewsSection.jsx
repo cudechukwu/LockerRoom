@@ -79,16 +79,16 @@ const NewsSection = ({ profile, userRole }) => {
 
 const styles = StyleSheet.create({
   newsSection: {
-    backgroundColor: COLORS.BACKGROUND_CARD_SECONDARY, // Match HomeScreen nextUpCard background
-    padding: 20,
-    marginHorizontal: 20,
-    marginBottom: 20,
+    backgroundColor: COLORS.BACKGROUND_CARD,
+    padding: 24,
+    marginBottom: 12,
     borderRadius: 16,
+    alignSelf: 'stretch',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 10,
   },
   newsSectionTitle: {
     ...TYPOGRAPHY.eventTitle, // Match HomeScreen card primary text

@@ -1,17 +1,17 @@
-import { useQueries, useQuery } from '@tanstack/react-query';
-import { useMemo } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { dataCache } from '../utils/dataCache';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
+import React, { useEffect, useMemo } from 'react';
+import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
+import { TeamContext } from '../contexts/TeamContext';
 import { queryKeys } from './queryKeys';
-import { supabase } from '../lib/supabase';
 import { 
   getEventsForMonth, 
   getEventsForWeek, 
   getEventsForDay, 
   getUpcomingEvents,
   getTeamColors,
-  getEventColor
+  getEventColor,
 } from '../api/events';
+import { dataCache } from '../utils/dataCache';
 
 const CALENDAR_VIEWS = {
   MONTH: 'month',
@@ -19,133 +19,54 @@ const CALENDAR_VIEWS = {
   DAY: 'day',
 };
 
-/**
- * Hook for fetching and composing calendar-related data
- * Uses React Query with SWR pattern for instant rendering and background refresh
- * Includes AsyncStorage persistence for app restart survival
- */
-export function useCalendarData(currentView, currentDate) {
-  // Get current user
-  const { data: user } = useQuery({
-    queryKey: ['currentUser'],
-    queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('No authenticated user');
-      return user;
-    },
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    gcTime: 10 * 60 * 1000, // 10 minutes
-  });
+const CACHE_TTL = {
+  SHORT: 2 * 60 * 1000,
+  MEDIUM: 10 * 60 * 1000,
+  LONG: 30 * 60 * 1000,
+};
 
-  // Get user's team membership
-  const { data: teamMembership } = useQuery({
-    queryKey: queryKeys.userTeamMembership(user?.id),
-    queryFn: async () => {
-      if (!user?.id) return null;
-      
-      // Check cache first
-      const cacheKey = `teamMembership_${user.id}`;
-      const cached = await dataCache.get(cacheKey);
-      if (cached) {
-        if (__DEV__) console.log('📱 Using cached team membership');
-        return cached;
-      }
+const devLog = (...args) => {
+  if (__DEV__) console.log(...args);
+};
 
-      const { data: teamMember, error } = await supabase
-        .from('team_members')
-        .select('team_id')
-        .eq('user_id', user.id)
-        .single();
+const devWarn = (...args) => {
+  if (__DEV__) console.warn(...args);
+};
 
-      if (error) throw error;
-      
-      const result = teamMember || null;
-      await dataCache.set(cacheKey, result, 5 * 60 * 1000); // 5 min cache
-      await AsyncStorage.setItem(cacheKey, JSON.stringify(result));
-      
-      return result;
-    },
-    enabled: !!user?.id,
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    gcTime: 10 * 60 * 1000, // 10 minutes
-  });
+async function cacheGet(key) {
+  return dataCache.get(key);
+}
 
-  const teamId = teamMembership?.team_id;
+async function cacheSet(key, value, ttl = CACHE_TTL.MEDIUM) {
+  return dataCache.set(key, value, ttl);
+}
 
-  // Parallel queries for calendar data using React Query
-  const queries = useQueries({
-    queries: [
-      // Team colors
-      {
-        queryKey: queryKeys.teamColors(teamId),
-        queryFn: async () => {
-          if (!teamId) return null;
-          
-          const cacheKey = `teamColors_${teamId}`;
-          const cached = await dataCache.get(cacheKey);
-          if (cached) {
-            if (__DEV__) console.log('🎨 Using cached team colors');
-            return cached;
+async function safeFetch(fetchFn, ...args) {
+  const result = await fetchFn(...args);
+
+  if (result && typeof result === 'object' && 'data' in result && 'error' in result) {
+    if (result.error) throw result.error;
+    return result.data ?? null;
+  }
+
+  return result ?? null;
           }
 
-          const colors = await getTeamColors(teamId);
-          await dataCache.set(cacheKey, colors, 10 * 60 * 1000); // 10 min cache
-          await AsyncStorage.setItem(cacheKey, JSON.stringify(colors));
-          
-          return colors;
-        },
-        enabled: !!teamId,
-        staleTime: 10 * 60 * 1000, // 10 minutes
-        gcTime: 30 * 60 * 1000, // 30 minutes
-        keepPreviousData: true, // Keep previous data while fetching new
-      },
-      // Calendar events based on current view
-      {
-        queryKey: queryKeys.calendarEvents(teamId, currentView, currentDate?.toISOString()),
-        queryFn: async () => {
-          if (!teamId || !currentDate) return [];
-          
-          const cacheKey = `calendarEvents_${teamId}_${currentView}_${currentDate.toISOString().split('T')[0]}`;
-          const cached = await dataCache.get(cacheKey);
-          if (cached) {
-            if (__DEV__) console.log('📅 Using cached calendar events');
-            return cached;
-          }
+const useTeamContextIds = () => {
+  const { user } = React.useContext(AppBootstrapContext);
+  const { activeTeamId } = React.useContext(TeamContext);
+  return { user, teamId: activeTeamId };
+};
 
-          let eventsData = [];
-          
-          switch (currentView) {
-            case CALENDAR_VIEWS.MONTH:
-              const { data: monthEvents, error: monthError } = await getEventsForMonth(teamId, currentDate);
-              if (monthError) throw monthError;
-              eventsData = monthEvents || [];
-              break;
-              
-            case CALENDAR_VIEWS.WEEK:
-              const weekStart = new Date(currentDate);
-              weekStart.setDate(currentDate.getDate() - currentDate.getDay());
-              const { data: weekEvents, error: weekError } = await getEventsForWeek(teamId, weekStart);
-              if (weekError) throw weekError;
-              eventsData = weekEvents || [];
-              break;
-              
-            case CALENDAR_VIEWS.DAY:
-              const { data: dayEvents, error: dayError } = await getEventsForDay(teamId, currentDate);
-              if (dayError) throw dayError;
-              eventsData = dayEvents || [];
-              break;
-              
-            default:
-              eventsData = [];
-          }
+const createEventsCacheKey = (teamId, currentView, dayKey) => `calendarEvents_${teamId}_${currentView}_${dayKey}`;
 
-          // Transform database events to match the expected format
-          const transformedEvents = eventsData.map(event => ({
+const buildEventPayload = (eventsData = [], teamColors = {}) =>
+  eventsData.map((event) => ({
             id: event.id,
             title: event.title || '',
             description: event.description || '',
             eventType: event.event_type,
-            event_type: event.event_type, // Keep both for compatibility
+    event_type: event.event_type,
             startTime: new Date(event.start_time),
             endTime: new Date(event.end_time),
             location: event.location || '',
@@ -156,96 +77,215 @@ export function useCalendarData(currentView, currentDate) {
             createdBy: event.created_by,
             attending: event.attending_count || 0,
             total: event.total_invited || 0,
-            date: new Date(event.start_time), // Add date property for compatibility
-            notes: event.description || '', // Add notes for compatibility
-            postTo: event.visibility === 'personal' ? 'Personal' : 'Team'
-          }));
+    date: new Date(event.start_time),
+    notes: event.description || '',
+    postTo: event.visibility === 'personal' ? 'Personal' : 'Team',
+  }));
 
-          await dataCache.set(cacheKey, transformedEvents, 2 * 60 * 1000); // 2 min cache
-          await AsyncStorage.setItem(cacheKey, JSON.stringify(transformedEvents));
-          
+const fetchEventsByView = async (teamId, currentView, currentDate) => {
+  if (!teamId || !currentDate) return [];
+
+  switch (currentView) {
+    case CALENDAR_VIEWS.MONTH:
+      return (await safeFetch(getEventsForMonth, teamId, currentDate)) || [];
+    case CALENDAR_VIEWS.WEEK: {
+      const weekStart = new Date(currentDate);
+      weekStart.setDate(currentDate.getDate() - currentDate.getDay());
+      return (await safeFetch(getEventsForWeek, teamId, weekStart)) || [];
+    }
+    case CALENDAR_VIEWS.DAY:
+      return (await safeFetch(getEventsForDay, teamId, currentDate)) || [];
+    default:
+      return [];
+  }
+};
+
+const fetchAndCacheEvents = async (teamId, currentView, currentDate, teamColors) => {
+  const dayKey = normalizeDateKey(currentDate);
+  if (!teamId || !dayKey) return [];
+
+  const cacheKey = createEventsCacheKey(teamId, currentView, dayKey);
+  const cached = await cacheGet(cacheKey);
+  if (cached) {
+    devLog('📅 Using cached calendar events');
+    return cached;
+  }
+
+  const eventsData = await fetchEventsByView(teamId, currentView, currentDate);
+  const transformedEvents = buildEventPayload(eventsData, teamColors);
+  await cacheSet(cacheKey, transformedEvents, CACHE_TTL.SHORT);
           return transformedEvents;
+};
+
+export function useTeamColors(teamId) {
+  return useQueries({
+    queries: [
+      {
+        queryKey: queryKeys.teamColors(teamId),
+        queryFn: async () => {
+          if (!teamId) return null;
+          const cacheKey = `teamColors_${teamId}`;
+          const cached = await cacheGet(cacheKey);
+          if (cached) {
+            devLog('🎨 Using cached team colors');
+            return cached;
+          }
+          const colors = await safeFetch(getTeamColors, teamId);
+          await cacheSet(cacheKey, colors, CACHE_TTL.LONG);
+          return colors;
         },
-        enabled: !!teamId && !!currentDate,
-        staleTime: 2 * 60 * 1000, // 2 minutes
-        gcTime: 10 * 60 * 1000, // 10 minutes
-        keepPreviousData: true, // Smooth transitions between views
+        enabled: !!teamId,
+        staleTime: CACHE_TTL.MEDIUM,
+        gcTime: CACHE_TTL.LONG,
+        keepPreviousData: true,
       },
-      // Upcoming events
+    ],
+  })[0];
+}
+
+const normalizeDateKey = (date) => date?.toISOString?.().split('T')[0] ?? null;
+
+export function useCalendarEvents(teamId, currentView, currentDate, teamColors) {
+  return useQueries({
+    queries: [
+      {
+        queryKey: queryKeys.calendarEvents(teamId, currentView, normalizeDateKey(currentDate)),
+        queryFn: () => fetchAndCacheEvents(teamId, currentView, currentDate, teamColors),
+        enabled: !!teamId && !!currentDate,
+        staleTime: CACHE_TTL.SHORT,
+        gcTime: CACHE_TTL.MEDIUM,
+        keepPreviousData: true,
+      },
+    ],
+  })[0];
+}
+
+export function useUpcomingEvents(teamId, teamColors) {
+  return useQueries({
+    queries: [
       {
         queryKey: queryKeys.upcomingEvents(teamId),
         queryFn: async () => {
           if (!teamId) return [];
-          
           const cacheKey = `upcomingEvents_${teamId}`;
-          const cached = await dataCache.get(cacheKey);
+          const cached = await cacheGet(cacheKey);
           if (cached) {
-            if (__DEV__) console.log('⏰ Using cached upcoming events');
+            devLog('⏰ Using cached upcoming events');
             return cached;
           }
 
-          const { data, error } = await getUpcomingEvents(teamId, 5);
-          if (error) throw error;
-          
-          const upcomingEvents = (data || []).map(event => ({
+          const upcomingData = await safeFetch(getUpcomingEvents, teamId, 5);
+          const upcomingEvents = (upcomingData || []).map((event) => ({
             id: event.id,
             title: event.title,
             date: new Date(event.start_time),
             time: new Date(event.start_time).toLocaleTimeString('en-US', { 
               hour: 'numeric', 
               minute: '2-digit',
-              hour12: true 
+              hour12: true,
             }),
             location: event.location,
             type: event.event_type,
-            color: event.color || getEventColor(event.event_type, teamColors)
+            color: event.color || getEventColor(event.event_type, teamColors || {}),
           }));
 
-          await dataCache.set(cacheKey, upcomingEvents, 2 * 60 * 1000); // 2 min cache
-          await AsyncStorage.setItem(cacheKey, JSON.stringify(upcomingEvents));
-          
+          await cacheSet(cacheKey, upcomingEvents, CACHE_TTL.SHORT);
           return upcomingEvents;
         },
         enabled: !!teamId,
-        staleTime: 2 * 60 * 1000, // 2 minutes
-        gcTime: 10 * 60 * 1000, // 10 minutes
-        keepPreviousData: true, // Keep previous data while fetching
+        staleTime: CACHE_TTL.SHORT,
+        gcTime: CACHE_TTL.MEDIUM,
+        keepPreviousData: true,
       },
     ],
+  })[0];
+}
+
+const usePrefetchAdjacentPeriods = (teamId, currentView, currentDate, teamColors, queryClient) => {
+  useEffect(() => {
+    if (!teamId || !currentDate) return;
+
+    const offsets = {
+      [CALENDAR_VIEWS.WEEK]: 7,
+      [CALENDAR_VIEWS.DAY]: 1,
+      [CALENDAR_VIEWS.MONTH]: 30,
+    };
+    const offset = offsets[currentView];
+    if (!offset) return;
+
+    const nextDate = new Date(currentDate);
+    nextDate.setDate(currentDate.getDate() + offset);
+    const nextKey = normalizeDateKey(nextDate);
+
+    devLog('🔮 Prefetching calendar view', { currentView, nextKey });
+    queryClient.prefetchQuery({
+      queryKey: queryKeys.calendarEvents(teamId, currentView, nextKey),
+      queryFn: () => fetchAndCacheEvents(teamId, currentView, nextDate, teamColors),
+      staleTime: CACHE_TTL.SHORT,
   });
+  }, [teamId, currentView, currentDate, teamColors, queryClient]);
+};
 
-  const [teamColorsQuery, calendarEventsQuery, upcomingEventsQuery] = queries;
+export function useCalendarData(currentView, currentDate) {
+  const { user, teamId } = useTeamContextIds();
+  const queryClient = useQueryClient();
 
-  // Combine all data into a single object
-  const calendarData = useMemo(() => {
+  useEffect(() => {
+    devLog('🗓️ useCalendarData context snapshot:', {
+      hasUser: !!user,
+      teamId,
+      currentView,
+      currentDate: currentDate?.toISOString?.() ?? null,
+    });
+  }, [user, teamId, currentView, currentDate]);
+
+  const teamColorsQuery = useTeamColors(teamId);
     const teamColors = teamColorsQuery?.data || { primary: '#FF4444', secondary: '#000000' };
-    const events = calendarEventsQuery?.data || [];
-    const upcomingEvents = upcomingEventsQuery?.data || [];
+  const calendarEventsQuery = useCalendarEvents(teamId, currentView, currentDate, teamColors);
+  const upcomingEventsQuery = useUpcomingEvents(teamId, teamColors);
 
-    const combined = {
+  usePrefetchAdjacentPeriods(teamId, currentView, currentDate, teamColors, queryClient);
+
+  const isLoading =
+    (teamColorsQuery?.isLoading && !teamColorsQuery?.data) ||
+    (calendarEventsQuery?.isLoading && !calendarEventsQuery?.data) ||
+    (upcomingEventsQuery?.isLoading && !upcomingEventsQuery?.data);
+  const isFetching =
+    teamColorsQuery?.isFetching || calendarEventsQuery?.isFetching || upcomingEventsQuery?.isFetching;
+  const error =
+    teamColorsQuery?.error || calendarEventsQuery?.error || upcomingEventsQuery?.error || null;
+
+  const data = useMemo(
+    () => ({
       teamId,
       teamColors,
-      events,
-      upcomingEvents,
-      isLoading: queries.some(q => q.isLoading),
-      isFetching: queries.some(q => q.isFetching),
-      error: queries.find(q => q.error)?.error || null,
-      refetch: () => queries.forEach(q => q.refetch()),
-    };
+      events: calendarEventsQuery?.data || [],
+      upcomingEvents: upcomingEventsQuery?.data || [],
+      isLoading,
+      isFetching,
+      error,
+      refetch: async () => {
+        const queries = [teamColorsQuery, calendarEventsQuery, upcomingEventsQuery].filter(
+          (q) => typeof q?.refetch === 'function' && q?.isFetched,
+        );
+        const results = await Promise.allSettled(queries.map((q) => q.refetch()));
+        results.forEach((result) => {
+          if (result.status === 'rejected') {
+            devWarn('Refetch failed:', result.reason);
+          }
+        });
+      },
+    }),
+    [
+      teamId,
+      teamColors,
+      calendarEventsQuery?.data,
+      upcomingEventsQuery?.data,
+      isLoading,
+      isFetching,
+      error,
+    ],
+  );
 
-    if (__DEV__) {
-      console.log('✅ Combined calendar data:', {
-        teamId: combined.teamId,
-        eventsCount: combined.events.length,
-        upcomingEventsCount: combined.upcomingEvents.length,
-        teamColors: combined.teamColors,
-        isLoading: combined.isLoading,
-        isFetching: combined.isFetching,
-      });
-    }
-
-    return combined;
-  }, [queries, teamId]);
-
-  return calendarData;
+  return data;
 }

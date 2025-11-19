@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useContext } from 'react';
 import {
   View,
   Text,
@@ -6,40 +6,29 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
-  Dimensions,
   StyleSheet,
   SafeAreaView,
   Image,
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  ImageBackground,
 } from 'react-native';
-import { Asset } from 'expo-asset';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
-import { getFontFamily, getFontWeight, getFontSize } from '../constants/fonts';
+import { getFontWeight, getFontSize } from '../constants/fonts';
 import { supabase } from '../lib/supabase';
-
-const { width, height } = Dimensions.get('window');
-const isTablet = width >= 768;
+import { ensureUserProfile } from '../lib/onboarding';
+import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
 
 const SignInScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
   });
-
-  useEffect(() => {
-    // Preload the logo image to prevent flash
-    Asset.loadAsync(require('../../assets/LockerRoom.png')).then(() => {
-      setImageLoaded(true);
-    });
-  }, []);
+  const { refreshBootstrap } = useContext(AppBootstrapContext);
 
   const updateFormData = (key, value) => {
     setFormData(prev => ({ ...prev, [key]: value }));
@@ -73,8 +62,20 @@ const SignInScreen = ({ navigation }) => {
       if (error) throw error;
 
       if (data.user) {
-        // For now, just go to a blank screen since we haven't built the main app yet
-        navigation.navigate('Main');
+        try {
+          await ensureUserProfile(data.user);
+        } catch (seedError) {
+          console.error('⚠️ ensureUserProfile failed after sign in:', seedError);
+        }
+
+        const targetRoute = await refreshBootstrap({ showSpinner: false });
+
+        if (targetRoute) {
+          navigation.reset({
+            index: 0,
+            routes: [{ name: targetRoute }],
+          });
+        }
       }
 
     } catch (error) {
@@ -111,55 +112,38 @@ const SignInScreen = ({ navigation }) => {
   };
 
   return (
-    <ImageBackground 
-      source={require('../../assets/whitesection.png')}
-      style={styles.container}
-      resizeMode="cover"
-    >
-      <View style={styles.overlay} />
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.header}>
-          <TouchableOpacity 
-            onPress={() => navigation.goBack()} 
-            style={styles.backButton}
-          >
-            <Text style={styles.backButtonText}>←</Text>
-          </TouchableOpacity>
-        </View>
-
         <KeyboardAvoidingView 
-          style={styles.keyboardAvoidingView}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
         >
         <ScrollView
-          style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
-          bounces={true}
-          alwaysBounceVertical={true}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.content}>
             <View style={styles.brandSection}>
-              {imageLoaded && (
                 <Image
                   source={require('../../assets/LockerRoom.png')}
-                  style={styles.lockerLogo}
+                style={styles.brandLogo}
                   resizeMode="contain"
                 />
-              )}
-              <Text style={styles.appName}>LockerRoom</Text>
-              <Text style={styles.tagline}>Welcome back</Text>
+            <View style={styles.brandText}>
+              <Text style={styles.brandTitle}>Welcome back</Text>
+              <Text style={styles.brandSubtitle}>
+                Sign in to catch up with your team and stay on pulse.
+              </Text>
+            </View>
             </View>
 
-            <View style={styles.formSection}>
+          <View style={styles.formArea}>
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Email</Text>
                 <TextInput
                   style={[
                     styles.textInput,
-                    focusedField === 'email' && styles.textInputFocused
+                  focusedField === 'email' && styles.textInputFocused,
                   ]}
                   value={formData.email}
                   onChangeText={(text) => updateFormData('email', text)}
@@ -168,16 +152,19 @@ const SignInScreen = ({ navigation }) => {
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={false}
-                  returnKeyType="next"
+                placeholder="you@example.com"
+                placeholderTextColor={COLORS.TEXT_MUTED}
                 />
               </View>
 
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Password</Text>
-                <View style={[
+              <View
+                style={[
                   styles.passwordContainer,
-                  focusedField === 'password' && styles.passwordContainerFocused
-                ]}>
+                  focusedField === 'password' && styles.passwordContainerFocused,
+                ]}
+              >
                   <TextInput
                     style={styles.passwordInput}
                     value={formData.password}
@@ -186,10 +173,14 @@ const SignInScreen = ({ navigation }) => {
                     onBlur={() => setFocusedField(null)}
                     secureTextEntry={!showPassword}
                     returnKeyType="done"
+                  placeholder="Enter your password"
+                  placeholderTextColor={COLORS.TEXT_MUTED}
                   />
                   <TouchableOpacity
                     style={styles.eyeButton}
                     onPress={() => setShowPassword(!showPassword)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Toggle password visibility"
                   >
                     <Ionicons
                       name={showPassword ? 'eye-off' : 'eye'}
@@ -208,174 +199,129 @@ const SignInScreen = ({ navigation }) => {
                 {loading ? (
                   <ActivityIndicator color={COLORS.WHITE} />
                 ) : (
-                  <Text style={styles.primaryButtonText}>Sign In</Text>
+                <Text style={styles.primaryButtonText}>Sign in</Text>
                 )}
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.forgotPasswordButton}
-                onPress={() => {
-                  // TODO: Implement forgot password
-                  Alert.alert('Coming Soon', 'Forgot password functionality will be available soon.');
-                }}
+              style={styles.secondaryAction}
+              onPress={() =>
+                Alert.alert('Coming soon', 'Password reset will be available shortly.')
+              }
               >
-                <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+              <Text style={styles.secondaryTextBold}>Forgot password?</Text>
               </TouchableOpacity>
 
-              <Text style={styles.legalText}>
-                Don't have an account?{' '}
-                <Text 
-                  style={styles.link}
+            <TouchableOpacity
+              style={styles.secondaryAction}
                   onPress={() => navigation.navigate('CreateAccount')}
                 >
-                  Create one
-                </Text>
+              <Text style={styles.secondaryText}>
+                New to LockerRoom?{' '}
+                <Text style={styles.secondaryTextBold}>Create an account</Text>
               </Text>
-            </View>
+            </TouchableOpacity>
           </View>
         </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
-    </ImageBackground>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
   safeArea: {
     flex: 1,
-    zIndex: 2,
+    backgroundColor: COLORS.WHITE,
   },
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    zIndex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: isTablet ? 24 : 20,
-    paddingVertical: 16,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F3F4F6',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  backButtonText: {
-    color: COLORS.PRIMARY_BLACK,
-    fontSize: 20,
-    fontWeight: '600',
-  },
-  keyboardAvoidingView: {
-    flex: 1,
-  },
-  scrollView: {
+  flex: {
     flex: 1,
   },
   scrollContent: {
     flexGrow: 1,
-    paddingBottom: 40,
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: isTablet ? 32 : 28,
+    paddingHorizontal: 24,
+    paddingVertical: 32,
   },
   brandSection: {
-    alignItems: 'center',
-    marginTop: isTablet ? 24 : 20,
-    marginBottom: isTablet ? 48 : 36,
+    gap: 20,
+    marginBottom: 28,
+    paddingTop: 32,
   },
-  lockerLogo: {
-    width: isTablet ? 80 : 60,
-    height: isTablet ? 80 : 60,
-    marginBottom: 16,
-    borderRadius: isTablet ? 16 : 12,
+  brandLogo: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    alignSelf: 'flex-start',
   },
-  appName: {
-    fontSize: getFontSize(isTablet ? '3XL' : '2XL'),
+  brandText: {
+    gap: 6,
+  },
+  brandTitle: {
+    fontSize: getFontSize('2XL'),
     fontWeight: getFontWeight('BOLD'),
     color: COLORS.PRIMARY_BLACK,
-    letterSpacing: 1.5,
-    marginBottom: 8,
-    fontFamily: 'Georgia',
   },
-  tagline: {
-    fontSize: getFontSize(isTablet ? 'BASE' : 'SM'),
+  brandSubtitle: {
+    fontSize: getFontSize('SM'),
     color: COLORS.MEDIUM_GRAY,
-    fontStyle: 'italic',
-    fontFamily: 'Georgia',
+    lineHeight: 20,
   },
-  formSection: {
-    flex: 1,
+  formArea: {
+    gap: 20,
   },
   inputGroup: {
-    marginBottom: 15,
+    gap: 6,
   },
   label: {
-    fontSize: getFontSize('BASE'),
+    fontSize: getFontSize('XS'),
     fontWeight: getFontWeight('SEMIBOLD'),
     color: COLORS.PRIMARY_BLACK,
-    marginBottom: 5,
   },
   textInput: {
-    backgroundColor: 'transparent',
-    borderRadius: 8,
-    paddingVertical: 14,
+    backgroundColor: '#F4F5F7',
+    borderRadius: 10,
+    paddingVertical: 12,
     paddingHorizontal: 16,
+    fontSize: getFontSize('SM'),
     color: COLORS.PRIMARY_BLACK,
-    fontSize: getFontSize('BASE'),
     borderWidth: 1,
-    borderColor: '#D0D0D0',
-    height: 48,
+    borderColor: '#EAEBF0',
   },
   textInputFocused: {
     borderColor: COLORS.PRIMARY_BLACK,
-    borderWidth: 2,
+    backgroundColor: COLORS.WHITE,
   },
   passwordContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'transparent',
-    borderRadius: 8,
+    borderRadius: 12,
+    backgroundColor: '#F4F5F7',
     borderWidth: 1,
-    borderColor: '#D0D0D0',
-    height: 48,
+    borderColor: '#EAEBF0',
   },
   passwordContainerFocused: {
     borderColor: COLORS.PRIMARY_BLACK,
-    borderWidth: 2,
+    backgroundColor: COLORS.WHITE,
   },
   passwordInput: {
     flex: 1,
-    paddingVertical: 14,
+    paddingVertical: 12,
     paddingHorizontal: 16,
+    fontSize: getFontSize('SM'),
     color: COLORS.PRIMARY_BLACK,
-    fontSize: getFontSize('BASE'),
   },
   eyeButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     justifyContent: 'center',
     alignItems: 'center',
   },
-
   primaryButton: {
-    backgroundColor: COLORS.PRIMARY_BLACK,
-    borderRadius: 8,
+    marginTop: 12,
     paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: COLORS.PRIMARY_BLACK,
     alignItems: 'center',
-    marginBottom: 32,
-    height: 48,
+    justifyContent: 'center',
   },
   primaryButtonDisabled: {
     opacity: 0.6,
@@ -385,25 +331,15 @@ const styles = StyleSheet.create({
     fontSize: getFontSize('BASE'),
     fontWeight: getFontWeight('SEMIBOLD'),
   },
-  forgotPasswordButton: {
+  secondaryAction: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginTop: 4,
   },
-  forgotPasswordText: {
-    color: COLORS.PRIMARY_BLACK,
-    fontSize: getFontSize('SM'),
-    textDecorationLine: 'underline',
-    opacity: 0.8,
-  },
-  legalText: {
+  secondaryText: {
     fontSize: getFontSize('SM'),
     color: COLORS.MEDIUM_GRAY,
-    textAlign: 'center',
-    lineHeight: 20,
-    paddingHorizontal: 16,
   },
-  link: {
-    textDecorationLine: 'underline',
+  secondaryTextBold: {
     color: COLORS.PRIMARY_BLACK,
     fontWeight: getFontWeight('SEMIBOLD'),
   },

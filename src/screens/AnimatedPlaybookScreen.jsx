@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
+import { BlurView } from 'expo-blur';
 import Svg, { Path, Circle } from 'react-native-svg';
 import { getFontFamily, getFontWeight, getFontSize } from '../constants/fonts';
 import { COLORS } from '../constants/colors';
@@ -21,6 +23,7 @@ import PlayerChip from '../components/PlayerChip';
 import ChipPalette from '../components/ChipPalette';
 import AnimationControls from '../components/AnimationControls';
 import TriggerSetupModal from '../components/TriggerSetupModal';
+import FormationSelector from '../components/FormationSelector';
 import { 
   normalizedToPixels, 
   pixelsToNormalized, 
@@ -66,11 +69,82 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
   // Trigger setup modal state
   const [showTriggerSetup, setShowTriggerSetup] = useState(false);
   
+  // Formation selection state
+  const [showFormationSelector, setShowFormationSelector] = useState(false);
+  const [selectedFormation, setSelectedFormation] = useState(null);
+  const [isFormationMode, setIsFormationMode] = useState(false);
+  
+  // Undo/Redo history
+  const undoHistoryRef = useRef([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const MAX_UNDO_HISTORY = 20; // Limit undo history size
+  
+  // Save current state to undo history
+  const saveToUndoHistory = useCallback((actionType, data) => {
+    const historyEntry = {
+      type: actionType,
+      timestamp: Date.now(),
+      playersSnapshot: JSON.parse(JSON.stringify(players)), // Deep copy
+      data: data // Additional data specific to action
+    };
+    
+    undoHistoryRef.current.push(historyEntry);
+    
+    // Limit history size
+    if (undoHistoryRef.current.length > MAX_UNDO_HISTORY) {
+      undoHistoryRef.current.shift(); // Remove oldest entry
+    }
+    
+    // Update canUndo state
+    setCanUndo(undoHistoryRef.current.length > 0);
+  }, [players]);
+  
+  // Undo last action
+  const handleUndo = useCallback(() => {
+    if (undoHistoryRef.current.length === 0) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+    
+    const lastAction = undoHistoryRef.current.pop();
+    
+    // Restore players to previous state
+    setPlayers(lastAction.playersSnapshot);
+    
+    // Update canUndo state
+    setCanUndo(undoHistoryRef.current.length > 0);
+    
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    
+    // Exit formation mode if we undid a formation placement
+    if (lastAction.type === 'placeFormation') {
+      setIsFormationMode(false);
+      setSelectedFormation(null);
+    }
+  }, []);
+  
+  // Bottom controls visibility state
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsTranslateY = useRef(new Animated.Value(0)).current;
+  const controlsHeightRef = useRef(0); // Store actual measured height
+  const handleHeight = 40; // Pull handle height in pixels
+  
   const animationRef = useRef(null);
   const gestureRefs = useRef({});
   
-  // Initialize field geometry hook
-  const fieldGeometry = useFieldGeometry({ extendX: 100, extendY: 50 });
+  // Initialize field geometry hook with permanently larger field
+  // All values are percentage-based for responsive design across different screen sizes
+  // Field extends from header to bottom of screen (palette overlays on top)
+  const fieldGeometry = useFieldGeometry({ 
+    extendX: 0.26, // 26% of screen width for horizontal extension
+    extendY: 0.07, // 7% of screen height for vertical extension
+    fieldHeightRatio: null, // null = calculate based on available viewport space
+    fieldAspectRatio: 0.85, // Wider field (85% aspect ratio)
+    headerHeight: null, // null = calculate as percentage (~10% of screen height)
+    controlsHeight: 0, // Don't subtract controls - field extends to bottom, palette overlays
+    safeAreaTop: insets.top,
+    safeAreaBottom: insets.bottom
+  });
   
   // Initialize field interactions hook
   const fieldInteractions = useFieldInteractions(
@@ -199,6 +273,34 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
     }));
   }, [interactionState.selectedPlayer, interactionState.currentRoute]);
   
+  // Handle formation selection
+  const handleFormationSelect = useCallback((formation) => {
+    setSelectedFormation(formation);
+    setIsFormationMode(true);
+    // Exit other modes when entering formation mode
+    setInteractionState(prev => ({
+      ...prev,
+      isDrawingRoute: false,
+      isDrawingPreSnapRoute: false,
+      isDeleteMode: false,
+      selectedChip: null,
+    }));
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  }, [setInteractionState]);
+
+  // Handle formation mode toggle
+  const handleFormationModeToggle = useCallback(() => {
+    if (isFormationMode) {
+      // Exit formation mode
+      setIsFormationMode(false);
+      setSelectedFormation(null);
+    } else {
+      // Open formation selector
+      setShowFormationSelector(true);
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, [isFormationMode]);
+  
   // Clean field press handler using action determination
   const handleFieldPress = useCallback((event) => {
     const { locationX, locationY } = event.nativeEvent;
@@ -206,6 +308,34 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
     // Check if tap is within field boundaries
     if (!fieldGeometry.isWithinField(locationX, locationY)) return;
     
+    // If in formation mode, place formation
+    if (isFormationMode && selectedFormation) {
+      // Save state before placing formation
+      saveToUndoHistory('placeFormation', {
+        formation: selectedFormation.name,
+        location: { x: locationX, y: locationY }
+      });
+      
+      const success = fieldInteractions.placeFormation(
+        selectedFormation,
+        { x: locationX, y: locationY }
+      );
+      
+      if (success) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        // Keep formation mode active for quick placement of same formation
+        // User can tap formation button again to exit or select different formation
+      } else {
+        // Remove the history entry if placement failed
+        undoHistoryRef.current.pop();
+        setCanUndo(undoHistoryRef.current.length > 0);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        // Could show alert here if desired
+      }
+      return;
+    }
+    
+    // Update handleFieldPress dependencies to include saveToUndoHistory
     // Determine what action to take (including pre-snap route mode)
     const action = determineAction({
       x: locationX,
@@ -227,11 +357,22 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
     // Execute the determined action
     switch (action.type) {
       case 'placePlayer':
+        // Save state before placing player
+        saveToUndoHistory('placePlayer', {
+          position: action.data.position,
+          location: action.data.location
+        });
         fieldInteractions.placePlayer(action.data.position, action.data.location);
         fieldInteractions.setSelectedChip(null);
         break;
         
       case 'deletePlayer':
+        // Save deleted player data before deleting
+        const playerToDelete = players.find(p => p.id === action.data.playerId);
+        saveToUndoHistory('deletePlayer', {
+          playerId: action.data.playerId,
+          deletedPlayer: playerToDelete
+        });
         fieldInteractions.deletePlayer(action.data.playerId);
         break;
         
@@ -248,28 +389,28 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
         // No action needed
         break;
     }
-  }, [players, fieldGeometry, interactionState, fieldInteractions, completePreSnapRoute]);
+  }, [players, fieldGeometry, interactionState, fieldInteractions, completePreSnapRoute, isFormationMode, selectedFormation, saveToUndoHistory]);
   
   // Handle chip drag with field boundary constraints
   const handleChipDrag = useCallback((playerId) => (event) => {
     const { translationX, translationY } = event.nativeEvent;
     
-    // Field dimensions (matching FootballField component)
+    // Use field geometry from hook for consistent dimensions (all percentage-based)
     const SCREEN_WIDTH = Dimensions.get('window').width;
-    const CARD_MARGIN = 40;
-    const CARD_WIDTH = SCREEN_WIDTH - (CARD_MARGIN * 2);
-    const CARD_PADDING = 16;
-    const FIELD_HEIGHT = Dimensions.get('window').height * 0.50;
-    const FIELD_WIDTH = FIELD_HEIGHT * 0.53;
+    const SCREEN_HEIGHT = Dimensions.get('window').height;
+    const FIELD_HEIGHT = SCREEN_HEIGHT * 0.72; // Match new permanent field height (72% of screen)
+    const FIELD_WIDTH = Math.min(SCREEN_WIDTH * 0.96, FIELD_HEIGHT * 0.85); // 96% of screen width
     
-    // Calculate actual field boundaries - use extended safe area
-    const fieldLeft = -100; // Start well beyond the left edge
-    const fieldRight = SCREEN_WIDTH + 100; // Extend well beyond the right edge
-    const fieldTop = -50; // Start above the field
-    const fieldBottom = FIELD_HEIGHT + 50; // Extend below the field
+    // Calculate extended safe area boundaries as percentage of screen size
+    const extendX = SCREEN_WIDTH * 0.26; // ~26% of screen width for horizontal extension
+    const extendY = SCREEN_HEIGHT * 0.07; // ~7% of screen height for vertical extension
+    const fieldLeft = -extendX; // Start well beyond the left edge
+    const fieldRight = SCREEN_WIDTH + extendX; // Extend well beyond the right edge
+    const fieldTop = -extendY; // Start above the field
+    const fieldBottom = FIELD_HEIGHT + extendY; // Extend below the field
     
-    // Chip size (matching PlayerChip field size)
-    const chipSize = 28;
+    // Chip size from field geometry hook (responsive)
+    const chipSize = fieldGeometry.chipSize;
     const halfChipSize = chipSize / 2;
     
     setPlayers(prev => prev.map(player => {
@@ -351,11 +492,30 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
   
   // Animation controls - now using clean contract
   const handlePlay = useCallback(() => {
+    // Debug: Check route status
+    const playersWithRoutes = players.filter(p => 
+      (p.track && p.track.length > 0) || (p.preSnapRoutes && p.preSnapRoutes.length > 0)
+    );
+    console.log('Play button pressed:', {
+      totalPlayers: players.length,
+      playersWithRoutes: playersWithRoutes.length,
+      hasRoutes: animationControls.hasRoutes,
+      routeDetails: players.map(p => ({
+        id: p.id,
+        position: p.position,
+        trackLength: p.track?.length || 0,
+        preSnapLength: p.preSnapRoutes?.length || 0
+      }))
+    });
+    
     const success = animationControls.play();
     if (!success) {
-      Alert.alert('No Routes', 'Please draw routes for players before playing animation');
+      Alert.alert(
+        'No Routes', 
+        `Please draw routes for players before playing animation.\n\nYou have ${players.length} player(s) on the field, but none have routes drawn yet.\n\nTo draw a route:\n1. Tap the route button (pencil icon)\n2. Tap on a player\n3. Tap on the field to create route points\n4. Tap the player again to complete the route`
+      );
     }
-  }, [animationControls]);
+  }, [animationControls, players]);
   
   const handlePause = useCallback(() => {
     animationControls.pause();
@@ -383,13 +543,84 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Clear', style: 'destructive', onPress: () => {
+          // Save state before clearing
+          saveToUndoHistory('clearField', {
+            playerCount: players.length
+          });
           fieldInteractions.clearAll();
         }},
       ]
     );
-  }, [fieldInteractions]);
+  }, [fieldInteractions, players, saveToUndoHistory]);
+
+  // Animate controls visibility
+  const animateControlsVisibility = useCallback((visible) => {
+    // Use actual measured height, fallback to estimate if not measured yet
+    const actualHeight = controlsHeightRef.current || Dimensions.get('window').height * 0.4;
+    
+    // When hidden, translate up by (actualHeight - handleHeight) to leave only handle visible
+    const hiddenOffset = actualHeight - handleHeight;
+    
+    Animated.spring(controlsTranslateY, {
+      toValue: visible ? 0 : hiddenOffset,
+      useNativeDriver: true,
+      tension: 80,
+      friction: 8,
+    }).start();
+  }, [controlsTranslateY]);
+
+  // Toggle bottom controls visibility
+  const toggleControlsVisibility = useCallback(() => {
+    const newVisibility = !controlsVisible;
+    setControlsVisible(newVisibility);
+    
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    animateControlsVisibility(newVisibility);
+  }, [controlsVisible, animateControlsVisibility]);
+
+  // Check if only pre-snap routes exist (no main play routes)
+  const hasOnlyPreSnapRoutes = useMemo(() => {
+    const hasPreSnap = players.some(player => 
+      player.preSnapRoutes && player.preSnapRoutes.length > 0
+    );
+    const hasMainPlay = players.some(player => 
+      player.track && player.track.length > 0
+    );
+    return hasPreSnap && !hasMainPlay;
+  }, [players]);
+
+  // Auto-hide palette when animation starts, show when it stops
+  useEffect(() => {
+    if (animationControls.isPlaying) {
+      // Hide palette when animation starts
+      setControlsVisible(false);
+      animateControlsVisibility(false);
+    } else {
+      // Show palette when animation stops
+      setControlsVisible(true);
+      animateControlsVisibility(true);
+    }
+  }, [animationControls.isPlaying, animateControlsVisibility]);
+
+  // For pre-snap only routes: show palette when animation completes
+  useEffect(() => {
+    if (hasOnlyPreSnapRoutes && animationControls.isPlaying) {
+      // Pre-snap duration is 2000ms (2 seconds)
+      const preSnapDuration = 2000;
+      const isComplete = animationControls.currentTime >= preSnapDuration;
+      
+      if (isComplete) {
+        // Animation completed, show palette
+        setControlsVisible(true);
+        animateControlsVisibility(true);
+      }
+    }
+  }, [hasOnlyPreSnapRoutes, animationControls.isPlaying, animationControls.currentTime, animateControlsVisibility]);
   
   const getHeaderSubtitle = () => {
+    if (isFormationMode && selectedFormation) {
+      return `Formation: ${selectedFormation.name}`;
+    }
     if (fieldInteractions.isDrawingRoute) {
       return "Route Mode";
     }
@@ -413,13 +644,19 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
       </TouchableOpacity>
       
       <View style={styles.headerLeft}>
-        <Text style={styles.headerTitle}>Animated Playbook</Text>
+        <Text style={styles.headerTitle}>Playbook</Text>
         <Text style={styles.headerSubtitle}>
           {getHeaderSubtitle()}
         </Text>
       </View>
       
-      <View style={styles.headerRight}>
+      <ScrollView 
+        horizontal 
+        style={styles.headerRightScroll}
+        contentContainerStyle={styles.headerRight}
+        showsHorizontalScrollIndicator={false}
+        bounces={false}
+      >
         <TouchableOpacity
           style={styles.headerButton}
           onPress={handleRouteDrawingToggle}
@@ -458,13 +695,26 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
         
         <TouchableOpacity
           style={styles.headerButton}
-          onPress={() => setShowTriggerSetup(true)}
+          onPress={handleFormationModeToggle}
           activeOpacity={0.7}
         >
           <Ionicons 
-            name="shield-outline" 
+            name={isFormationMode ? "apps" : "apps-outline"} 
             size={18} 
-            color="#CCCCCC" 
+            color={isFormationMode ? "#FFFFFF" : "#CCCCCC"} 
+          />
+        </TouchableOpacity>
+        
+        <TouchableOpacity
+          style={styles.headerButton}
+          onPress={handleUndo}
+          activeOpacity={0.7}
+          disabled={!canUndo}
+        >
+          <Ionicons 
+            name="arrow-undo-outline" 
+            size={18} 
+            color={canUndo ? "#FFFFFF" : "#666666"} 
           />
         </TouchableOpacity>
         
@@ -475,7 +725,7 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
         >
           <Ionicons name="refresh-outline" size={18} color="#CCCCCC" />
         </TouchableOpacity>
-      </View>
+      </ScrollView>
     </View>
   );
   
@@ -603,11 +853,14 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
           showsVerticalScrollIndicator={false}
           bounces={true}
           keyboardShouldPersistTaps="handled"
+          scrollEnabled={true}
         >
           <View style={styles.fieldContainer}>
             <FootballField 
               onFieldPress={handleFieldPress}
               touchOverlayDimensions={fieldGeometry.touchOverlayDimensions}
+              fieldHeight={fieldGeometry.fieldDimensions.height}
+              fieldWidth={fieldGeometry.fieldDimensions.width}
             >
               {renderPlayers()}
               {renderRoutes()}
@@ -616,8 +869,42 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
           </View>
         </ScrollView>
         
-        {/* Fixed bottom controls - always visible */}
-        <View style={styles.unifiedBottomControls}>
+        {/* Fixed bottom controls - toggleable */}
+        <Animated.View 
+          style={[
+            styles.unifiedBottomControls,
+            {
+              transform: [{ translateY: controlsTranslateY }]
+            }
+          ]}
+          onLayout={(e) => {
+            // Measure actual height of controls container
+            const measuredHeight = e.nativeEvent.layout.height;
+            if (measuredHeight > 0) {
+              controlsHeightRef.current = measuredHeight;
+            }
+          }}
+        >
+          <BlurView 
+            intensity={80} 
+            tint="dark" 
+            style={StyleSheet.absoluteFill}
+          />
+          {/* Pull Handle */}
+          <TouchableOpacity
+            style={styles.pullHandle}
+            onPress={toggleControlsVisibility}
+            activeOpacity={0.7}
+          >
+            <View style={styles.pullHandleBar} />
+            <Ionicons 
+              name={controlsVisible ? "chevron-down" : "chevron-up"} 
+              size={20} 
+              color="#FFFFFF" 
+              style={styles.pullHandleIcon}
+            />
+          </TouchableOpacity>
+          <View style={styles.controlsContent}>
           <ChipPalette
             onChipSelect={handleChipSelect}
             selectedChip={fieldInteractions.selectedChip}
@@ -639,6 +926,7 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
             hasRoutes={animationControls.hasRoutes}
           />
         </View>
+        </Animated.View>
         
         {/* Trigger Setup Modal */}
         <TriggerSetupModal
@@ -649,6 +937,14 @@ const AnimatedPlaybookScreen = ({ navigation }) => {
           onTriggerAdded={() => {
             console.log('Trigger added successfully');
           }}
+        />
+        
+        {/* Formation Selector Modal */}
+        <FormationSelector
+          visible={showFormationSelector}
+          onClose={() => setShowFormationSelector(false)}
+          onFormationSelect={handleFormationSelect}
+          selectedFormation={selectedFormation}
         />
       </SafeAreaView>
     </View>
@@ -674,8 +970,11 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   headerLeft: {
-    flex: 1,
+    flexShrink: 1,
+    flexGrow: 1,
     alignItems: 'flex-start',
+    minWidth: 0,
+    marginRight: 8,
   },
   headerTitle: {
     fontSize: getFontSize('SM'),
@@ -690,18 +989,22 @@ const styles = StyleSheet.create({
   headerRight: {
     flexDirection: 'row',
     gap: 8,
+    alignItems: 'center',
+    paddingRight: 4,
   },
   headerButton: {
     padding: 8,
     justifyContent: 'center',
     alignItems: 'center',
+    minWidth: 34,
+    minHeight: 34,
   },
   scrollView: {
     flex: 1,
   },
   scrollContent: {
     flexGrow: 1,
-    paddingBottom: 200, // Space for fixed bottom controls
+    paddingBottom: 0, // No padding - field extends to bottom, palette overlays
   },
   fieldContainer: {
     flex: 1,
@@ -715,6 +1018,33 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     backgroundColor: 'transparent',
+    overflow: 'hidden',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+  },
+  pullHandle: {
+    width: '100%',
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingBottom: 4,
+    backgroundColor: 'rgba(14, 14, 14, 0.9)',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+  },
+  pullHandleBar: {
+    width: 40,
+    height: 4,
+    backgroundColor: '#666666',
+    borderRadius: 2,
+    marginBottom: 4,
+  },
+  pullHandleIcon: {
+    opacity: 0.8,
+  },
+  controlsContent: {
+    backgroundColor: 'rgba(14, 14, 14, 0.7)', // Semi-transparent dark background for better contrast
   },
   routeModeIndicator: {
     backgroundColor: '#1A1A1A',

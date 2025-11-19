@@ -3,7 +3,7 @@
 
 import { supabase } from '../lib/supabase.js';
 
-// =============================================
+// ====================a=========================
 // HELPER FUNCTIONS
 // =============================================
 
@@ -508,9 +508,37 @@ export async function getAgoraToken(callSessionId, currentUser = null) {
       body: { callSessionId },
     });
 
-    if (error) {
-      await logError('getAgoraToken', error, callSessionId, user.id);
-      throw error;
+    // Handle errors - check both error object and data.error (for non-2xx responses)
+    if (error || data?.error) {
+      // Extract error message from either source
+      const errorMessage = error?.message || data?.error || 'Unknown error';
+      const errorType = data?.type || error?.name || 'Error';
+      
+      const errorDetails = {
+        message: errorMessage,
+        type: errorType,
+        callSessionId,
+        userId: user.id,
+        responseData: data,
+        errorObject: error,
+      };
+      
+      console.error('❌ Agora token request failed:', errorDetails);
+      await logError('getAgoraToken', new Error(JSON.stringify(errorDetails)), callSessionId, user.id);
+      
+      // Create a user-friendly error message
+      let userMessage = `Failed to get Agora token: ${errorMessage}`;
+      
+      // Add specific guidance based on error type
+      if (errorMessage.includes('Agora credentials not configured') || errorMessage.includes('AGORA_APP_ID')) {
+        userMessage += '\n\n⚠️ Agora credentials not set in Supabase. Please set AGORA_APP_ID and AGORA_APP_CERTIFICATE as secrets.';
+      } else if (errorMessage.includes('Missing Authorization') || errorType === 'UnauthorizedError') {
+        userMessage += '\n\n⚠️ Authentication failed. Please sign in again.';
+      } else if (errorType === 'NotFoundError') {
+        userMessage += '\n\n⚠️ Call session not found or you are not a participant.';
+      }
+      
+      throw new Error(userMessage);
     }
 
     // Cache the token

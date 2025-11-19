@@ -12,6 +12,7 @@ export const queryKeys = {
   channels: (teamId) => ['channels', teamId],
   directMessages: (teamId) => ['directMessages', teamId],
   teamConversations: (teamId, userId) => ['teamConversations', teamId, userId],
+  threadMessages: (parentMessageId) => ['threadMessages', parentMessageId],
   channelDetails: (channelId) => ['channelDetails', channelId],
   // Playbook system keys
   playbooks: (teamId) => ['playbooks', teamId],

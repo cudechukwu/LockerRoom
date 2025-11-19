@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useContext } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,8 @@ import {
 import { COLORS } from '../constants/colors';
 import { getFontFamily, getFontWeight, getFontSize } from '../constants/fonts';
 import { supabase, TABLES, STORAGE_BUCKETS } from '../lib/supabase';
+import { seedInitialData, ensureUserProfile } from '../lib/onboarding';
+import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -53,6 +55,7 @@ const TeamSetupScreen = ({ navigation }) => {
   });
 
   const scrollViewRef = useRef();
+  const { refreshBootstrap } = useContext(AppBootstrapContext);
 
   useEffect(() => {
     // Check authentication state when component mounts
@@ -152,6 +155,13 @@ const TeamSetupScreen = ({ navigation }) => {
 
       console.log('User authenticated:', user.id);
 
+      // Ensure base user profile exists even if they skipped account completion
+      try {
+        await ensureUserProfile(user, user.user_metadata?.name || formData.team_name);
+      } catch (seedError) {
+        console.warn('⚠️ ensureUserProfile during team creation failed:', seedError);
+      }
+
       // Parse invite emails
       const invites = {
         coaches: parseEmailList(inviteEmails.coaches),
@@ -197,7 +207,7 @@ const TeamSetupScreen = ({ navigation }) => {
         .insert({
           team_id: team.id,
           code: joinCode,
-          expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          expires_at: null,
           created_by: user.id,
         });
 
@@ -206,10 +216,22 @@ const TeamSetupScreen = ({ navigation }) => {
       // TODO: Send invites (implement email service)
       // TODO: Upload logo if provided
 
+      try {
+        await seedInitialData({ user, team, role: 'coach' });
+        console.log('✅ seedInitialData completed for team creator');
+      } catch (seedError) {
+        console.warn('⚠️ seedInitialData failed for team creator:', seedError);
+      }
+
       Alert.alert(
         'Team Created!',
         'Your team has been created successfully. Invites will be sent shortly.',
-        [{ text: 'OK', onPress: () => navigation.navigate('Main') }]
+        [{
+          text: 'OK',
+          onPress: () => {
+            refreshBootstrap({ showSpinner: true });
+          }
+        }]
       );
 
     } catch (error) {

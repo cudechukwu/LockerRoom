@@ -30,6 +30,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../constants/chatColors';
 import { fonts } from '../constants/chatFonts';
 import { getFontFamily, getFontWeight, getFontSize } from '../constants/fonts';
+import { COLORS } from '../constants/colors';
 import ScreenBackground from '../components/ScreenBackground';
 import RichMessageInput from '../components/RichMessageInput';
 import ImageViewer from '../components/ImageViewer';
@@ -40,6 +41,7 @@ import { dataCache, CACHE_KEYS } from '../utils/dataCache';
 import { supabase } from '../lib/supabase';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useAuthTeam } from '../hooks/useAuthTeam';
+import { getUserProfile } from '../api/profiles';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -82,6 +84,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
   // Get user ID from global cache (10-minute TTL, no redundant calls)
   const { data: authData } = useAuthTeam();
   const currentUserId = authData?.userId;
+  const [currentUserAvatar, setCurrentUserAvatar] = useState(null);
   
   const [messages, setMessages] = useState([]);
   const [messagesLoading, setMessagesLoading] = useState(true);
@@ -205,6 +208,30 @@ const ChannelChatScreen = ({ navigation, route }) => {
   useEffect(() => {
     firstLoadRef.current = true;
   }, [channelId]);
+
+  // Load current user's avatar for optimistic messages
+  useEffect(() => {
+    const loadUserAvatar = async () => {
+      if (!currentUserId) return;
+      
+      // Try cache first
+      const cachedProfile = await dataCache.getUserProfile(currentUserId);
+      if (cachedProfile?.avatar_url) {
+        setCurrentUserAvatar(cachedProfile.avatar_url);
+        return;
+      }
+      
+      // Fetch if not in cache
+      const { data: profile } = await getUserProfile(currentUserId);
+      if (profile?.avatar_url) {
+        setCurrentUserAvatar(profile.avatar_url);
+        // Cache it
+        await dataCache.setUserProfile(currentUserId, profile);
+      }
+    };
+    
+    loadUserAvatar();
+  }, [currentUserId]);
 
   // Set up realtime subscription for messages
   useEffect(() => {
@@ -481,6 +508,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
         content: content.trim(),
         sender_id: currentUserId,
         sender_name: 'You',
+        sender_avatar: currentUserAvatar, // Include user's avatar optimistically
         isCurrentUser: true,
         message_type: messageType,
         reply_to_message_id: replyToMessage?.id || null,
@@ -1120,14 +1148,9 @@ const ChannelChatScreen = ({ navigation, route }) => {
     }, [highlightedMessageId]);
 
     const highlightStyle = useAnimatedStyle(() => {
-      const isCurrentUser = item.sender_id === currentUserId || item.isCurrentUser;
-      const highlightColor = 'rgba(255, 255, 255, 0.12)';
-      
       return {
-        backgroundColor: highlightColor,
-        borderRadius: 20, // Match bubble radius
-        paddingHorizontal: 14, // Match bubble padding
-        paddingVertical: 10,
+        backgroundColor: COLORS.BACKGROUND_MUTED,
+        borderRadius: 6,
         opacity: highlightOpacity.value,
       };
     });
@@ -1190,7 +1213,11 @@ const ChannelChatScreen = ({ navigation, route }) => {
         failOffsetY={[-10, 10]}
         simultaneousHandlers={flatListRef}
       >
-        <Animated.View style={[styles.messageWrapper, animatedStyle]}>
+        <Animated.View style={[
+          styles.messageWrapper, 
+          showProfilePicture && styles.messageWrapperWithAvatar,
+          animatedStyle
+        ]}>
           <TouchableOpacity
             onLongPress={(event) => handleLongPressMessage(item, event)}
             activeOpacity={1}
@@ -1213,20 +1240,12 @@ const ChannelChatScreen = ({ navigation, route }) => {
               </TouchableOpacity>
             )}
             
-            {/* Sender name above message */}
-            {item.sender_id !== currentUserId && !item.isCurrentUser && (
-              <Text style={styles.senderName}>{item.sender_name}</Text>
-            )}
-            
-            {/* Message content with optional profile picture */}
-            <View style={[
-              styles.messageContainer,
-              (item.sender_id === currentUserId || item.isCurrentUser) ? styles.currentUserContainer : styles.otherUserContainer
-            ]}>
-              {/* Profile picture for received messages */}
-              {showProfilePicture && item.sender_id !== currentUserId && !item.isCurrentUser && (
-                <>
-                  {item.sender_avatar ? (
+            {/* Slack-style message layout: Avatar always on left, name + timestamp inline */}
+            <View style={styles.messageRow}>
+              {/* Avatar column - always visible on left */}
+              <View style={styles.avatarColumn}>
+                {showProfilePicture ? (
+                  item.sender_avatar ? (
                     <Image 
                       source={{ uri: item.sender_avatar }} 
                       style={styles.senderProfilePicture}
@@ -1234,44 +1253,53 @@ const ChannelChatScreen = ({ navigation, route }) => {
                     />
                   ) : (
                     <View style={styles.senderProfilePicturePlaceholder}>
-                      <Ionicons name="person" size={18} color="#666" />
+                      <Ionicons name="person" size={18} color={COLORS.TEXT_TERTIARY} />
                     </View>
-                  )}
-                </>
+                  )
+                ) : (
+                  <View style={styles.avatarSpacer} />
               )}
+              </View>
               
-              {/* Text content in bubble */}
-              {item.content && (
-                <Animated.View style={[
-                  styles.messageBubble,
-                  (item.sender_id === currentUserId || item.isCurrentUser) ? styles.currentUserMessage : styles.otherUserMessage
-                ]}>
-                  {/* Highlight layer inside bubble */}
-                  <Animated.View style={[StyleSheet.absoluteFill, highlightStyle]} pointerEvents="none" />
-                  
-                  <Text style={[
-                    styles.messageText,
-                    (item.sender_id === currentUserId || item.isCurrentUser) ? styles.currentUserText : styles.otherUserText
-                  ]}>
-                    {item.content}
-                  </Text>
-                  <View style={styles.messageTimeContainer}>
-                    {renderReactions()}
-                    <Text style={styles.messageTime}>
-                      {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {/* Message content column */}
+              <View style={styles.messageContentColumn}>
+                {/* Sender name and timestamp inline - show when avatar is shown */}
+                {showProfilePicture && (
+                  <View style={styles.messageHeader}>
+                    <Text style={styles.senderNameInline}>{item.sender_name || 'Unknown'}</Text>
+                    <Text style={styles.messageTimestamp}>
+                      {new Date(item.created_at).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
                       {item.is_edited && <Text style={styles.editedIndicator}> • edited</Text>}
                     </Text>
                   </View>
-                </Animated.View>
+                )}
+
+                {/* Message text - no bubble, just text */}
+              {item.content && (
+                  <View style={styles.messageTextContainer}>
+                    {/* Highlight layer */}
+                  <Animated.View style={[StyleSheet.absoluteFill, highlightStyle]} pointerEvents="none" />
+                    <Text style={styles.messageText}>
+                    {item.content}
+                    </Text>
+                  </View>
               )}
+
+                {/* Reactions */}
+                {renderReactions()}
+              </View>
             </View>
             
-            {/* Images in dedicated media bubble */}
+            {/* Images - Slack-style, no bubble alignment */}
             {item.attachments && item.attachments.length > 0 && (
-              <View style={[
-                styles.mediaBubble,
-                (item.sender_id === currentUserId || item.isCurrentUser) ? styles.currentUserMedia : styles.otherUserMedia
-              ]}>
+              <View style={styles.messageRow}>
+                <View style={styles.avatarColumn}>
+                  <View style={styles.avatarSpacer} />
+                </View>
+                <View style={styles.messageContentColumn}>
                 <ScrollView 
                   horizontal 
                   showsHorizontalScrollIndicator={false}
@@ -1303,12 +1331,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
                     );
                   })}
                 </ScrollView>
-                <Text style={[
-                  styles.mediaTime,
-                  (item.sender_id === currentUserId || item.isCurrentUser) ? styles.currentUserMediaTime : styles.otherUserMediaTime
-                ]}>
-                  {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </Text>
+                </View>
               </View>
             )}
             
@@ -1324,8 +1347,14 @@ const ChannelChatScreen = ({ navigation, route }) => {
 
   const renderMessage = ({ item, index }) => {
     const previousMessage = index > 0 ? messages[index - 1] : null;
-    const showProfilePicture = item.sender_id !== currentUserId && !item.isCurrentUser && 
-      (!previousMessage || previousMessage.sender_id !== item.sender_id);
+    
+    // Show avatar when:
+    // 1. It's the first message
+    // 2. It's a different sender
+    // 3. 10 minutes (600,000 ms) have passed since the previous message
+    const showProfilePicture = !previousMessage || 
+      previousMessage.sender_id !== item.sender_id ||
+      (new Date(item.created_at).getTime() - new Date(previousMessage.created_at).getTime() > 10 * 60 * 1000);
     
     return <AnimatedMessage item={item} showProfilePicture={showProfilePicture} />;
   };
@@ -1355,12 +1384,12 @@ const ChannelChatScreen = ({ navigation, route }) => {
         onPress={() => navigation.goBack()}
         activeOpacity={0.7}
       >
-        <Ionicons name="chevron-back" size={24} color="#FFFFFF" />
+        <Ionicons name="chevron-back" size={22} color={COLORS.TEXT_PRIMARY} />
       </TouchableOpacity>
       
       {logoSource.isIcon ? (
         <View style={[styles.teamLogo, styles.iconContainer]}>
-          <Ionicons name={logoSource.iconName} size={24} color="#CCCCCC" />
+          <Ionicons name={logoSource.iconName} size={20} color={COLORS.TEXT_SECONDARY} />
         </View>
       ) : (
         <Image 
@@ -1390,7 +1419,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
         <Ionicons 
           name="grid" 
           size={20} 
-          color="#FFFFFF" 
+          color={COLORS.TEXT_PRIMARY} 
         />
       </TouchableOpacity>
     </View>
@@ -1681,26 +1710,28 @@ const ChannelChatScreen = ({ navigation, route }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0E0E0E', // Match HomeScreen
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#0E0E0E',
+    paddingVertical: 14,
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
+    borderBottomWidth: 0.5,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   },
   teamLogo: {
     width: 36,
     height: 36,
-    borderRadius: 18,
-    marginLeft: 4,
-    marginRight: 12,
+    borderRadius: 13, // Circular
+    marginRight: 10,
   },
   iconContainer: {
-    backgroundColor: '#2A2A2A',
+    backgroundColor: COLORS.BACKGROUND_CARD,
     justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 13, // Match team logo roundness
   },
   headerCenter: {
     flex: 1,
@@ -1708,15 +1739,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
   },
   backButton: {
-    paddingVertical: 8,
+    paddingVertical: 6,
     paddingHorizontal: 4,
-    marginRight: 4,
+    marginRight: 6,
+    borderRadius: 8,
   },
   headerTitle: {
-    fontSize: 15,
-    fontWeight: getFontWeight('SEMIBOLD'),
-    color: '#FFFFFF',
+    fontSize: 16,
+    fontFamily: fonts.semiBold,
+    fontWeight: '600',
+    color: COLORS.TEXT_PRIMARY,
     textAlign: 'left',
+    letterSpacing: -0.2,
   },
   headerSubtitle: {
     fontSize: getFontSize('XS'),
@@ -1730,87 +1764,90 @@ const styles = StyleSheet.create({
   },
   chatContainer: {
     flex: 1,
-    backgroundColor: '#0E0E0E',
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
   },
   messagesContainer: {
     flexGrow: 1,
-    paddingHorizontal: 16,
     paddingVertical: 12,
     paddingBottom: 80, // Extra padding for composer height
   },
   messageWrapper: {
-    marginVertical: 4, // Reduced from 4 to minimize gaps
+    marginVertical: 1,
   },
-  messageContainer: {
+  messageWrapperWithAvatar: {
+    marginTop: 9,
+    marginBottom: 4,
+  },
+  // Slack-style message row layout
+  messageRow: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'flex-start',
+    paddingHorizontal: 16,
+    paddingVertical: 4,
   },
-  currentUserContainer: {
-    justifyContent: 'flex-end',
+  avatarColumn: {
+    width: 40,
+    alignItems: 'center',
+    marginRight: 10,
   },
-  otherUserContainer: {
-    justifyContent: 'flex-start',
+  avatarSpacer: {
+    width: 40,
+    height: 40,
   },
   senderProfilePicture: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    marginRight: 8,
-    marginBottom: 2,
+    width: 40,
+    height: 40,
+    borderRadius: 14, // Match team logo roundness ratio (13/36 * 40 = ~14)
   },
   senderProfilePicturePlaceholder: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    marginRight: 8,
-    marginBottom: 2,
-    backgroundColor: '#2A2A2A',
+    width: 40,
+    height: 40,
+    borderRadius: 14, // Match team logo roundness ratio
+    backgroundColor: COLORS.BACKGROUND_CARD,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
   },
-  senderName: {
-    fontSize: 12,
-    fontFamily: fonts.medium,
-    color: '#CCCCCC',
-    marginBottom: 6,
-    marginLeft: 40, // Align with the start of the message bubble (profile picture width + margin)
+  messageContentColumn: {
+    flex: 1,
+    minWidth: 0, // Allow text to wrap
   },
-  messageBubble: {
-    maxWidth: '78%',
-    minWidth: 60,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 20,
+  messageHeader: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    marginBottom: 2,
+    gap: 8,
   },
-  currentUserMessage: {
-    backgroundColor: '#1A1A1A',
-    alignSelf: 'flex-end',
+  senderNameInline: {
+    fontSize: 16,
+    fontFamily: fonts.semiBold,
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: '600',
+    letterSpacing: -0.1,
   },
-  otherUserMessage: {
-    backgroundColor: '#161616',
-    alignSelf: 'flex-start',
+  messageTimestamp: {
+    fontSize: 11,
+    fontFamily: fonts.regular,
+    color: COLORS.TEXT_TERTIARY,
+    letterSpacing: 0.1,
+  },
+  messageTextContainer: {
+    marginTop: 1,
+    marginBottom: 3,
+    position: 'relative',
   },
   messageText: {
-    fontSize: 15,
+    fontSize: 16,
     fontFamily: fonts.regular,
     lineHeight: 20,
+    color: COLORS.TEXT_PRIMARY,
+    letterSpacing: -0.08,
   },
-  currentUserText: {
-    color: '#FFFFFF',
-  },
-  otherUserText: {
-    color: '#FFFFFF',
-  },
-  // Dedicated media bubble styles - no background, minimal padding
+  // Media styles - Slack-style, no bubbles
   mediaBubble: {
-    maxWidth: '85%',
-    marginTop: 4, // Small gap from text message if both exist
-  },
-  currentUserMedia: {
-    alignSelf: 'flex-end',
-  },
-  otherUserMedia: {
-    alignSelf: 'flex-start',
+    marginTop: 8,
+    marginBottom: 4,
   },
   imageScrollView: {
     // Remove maxHeight to let it size naturally
@@ -1842,7 +1879,7 @@ const styles = StyleSheet.create({
   messageTime: {
     fontSize: 11,
     fontFamily: fonts.regular,
-    color: '#8E8E93',
+    color: COLORS.TEXT_TERTIARY,
     marginTop: 6,
   },
   messageTimeContainer: {
@@ -1856,21 +1893,25 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'flex-start',
-    gap: 4,
+    gap: 6,
     maxWidth: '100%',
     alignSelf: 'flex-start',
+    marginTop: 4,
   },
   reactionPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 12,
+    backgroundColor: COLORS.BACKGROUND_MUTED,
+    borderRadius: 14,
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    gap: 4,
+    paddingVertical: 5,
+    gap: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
   },
   userReactionPill: {
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   reactionEmoji: {
     fontSize: 12,
@@ -1878,12 +1919,13 @@ const styles = StyleSheet.create({
   reactionCount: {
     fontSize: 11,
     fontFamily: fonts.medium,
-    color: '#CCCCCC',
+    color: COLORS.TEXT_SECONDARY,
+    fontWeight: '500',
   },
   editedIndicator: {
     fontSize: 11,
     fontFamily: fonts.regular,
-    color: '#8E8E93',
+    color: COLORS.TEXT_TERTIARY,
     fontStyle: 'italic',
   },
   deleteButton: {
@@ -1893,7 +1935,7 @@ const styles = StyleSheet.create({
   mediaTime: {
     fontSize: 11,
     fontFamily: fonts.regular,
-    color: '#8E8E93',
+    color: COLORS.TEXT_TERTIARY,
     marginTop: 4, // Small gap from images
   },
   currentUserMediaTime: {
@@ -1903,12 +1945,13 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   keyboardAvoidingView: {
-    backgroundColor: '#0E0E0E',
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
   },
   inputArea: {
-    backgroundColor: '#0E0E0E',
-    paddingHorizontal: 16,
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
+    paddingHorizontal: 0,
     paddingVertical: 12,
+    width: '100%',
   },
   loadingContainer: {
     flex: 1,
@@ -1916,9 +1959,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loadingText: {
-    fontSize: 16,
+    fontSize: 15,
     fontFamily: fonts.regular,
-    color: '#8E8E93',
+    color: COLORS.TEXT_TERTIARY,
     marginTop: 16,
   },
   // Reply functionality styles
@@ -1926,16 +1969,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     marginBottom: 8,
+    marginLeft: 50, // Align with message content (avatar width + margin)
     paddingHorizontal: 12,
     paddingVertical: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 12,
-    marginHorizontal: 4,
+    backgroundColor: COLORS.BACKGROUND_MUTED,
+    borderRadius: 8,
+    borderLeftWidth: 2,
+    borderLeftColor: COLORS.TEXT_TERTIARY,
   },
   replyIndicator: {
-    width: 3,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 1.5,
+    width: 2,
+    backgroundColor: COLORS.TEXT_TERTIARY,
+    borderRadius: 1,
     marginRight: 10,
     marginTop: 2,
   },
@@ -1945,24 +1990,28 @@ const styles = StyleSheet.create({
   replySenderName: {
     fontSize: 12,
     fontFamily: fonts.semiBold,
-    color: '#FFFFFF',
-    marginBottom: 2,
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: 3,
+    fontWeight: '600',
   },
   replyText: {
     fontSize: 12,
     fontFamily: fonts.regular,
-    color: '#CCCCCC',
+    color: COLORS.TEXT_SECONDARY,
     lineHeight: 16,
+    opacity: 0.8,
   },
   replyPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1A1A1A',
-    borderRadius: 16,
+    backgroundColor: COLORS.BACKGROUND_CARD,
+    borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 12,
-    marginHorizontal: 4,
+    marginHorizontal: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
   },
   replyPillContent: {
     flexDirection: 'row',
@@ -1970,11 +2019,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   replyPillIndicator: {
-    width: 3,
+    width: 2,
     height: 20,
-    backgroundColor: colors.primary,
-    borderRadius: 1.5,
-    marginRight: 8,
+    backgroundColor: COLORS.TEXT_TERTIARY,
+    borderRadius: 1,
+    marginRight: 10,
   },
   replyPillText: {
     flex: 1,
@@ -1982,13 +2031,14 @@ const styles = StyleSheet.create({
   replyPillSender: {
     fontSize: 12,
     fontFamily: fonts.semiBold,
-    color: '#FFFFFF',
+    color: COLORS.TEXT_PRIMARY,
     marginBottom: 2,
+    fontWeight: '600',
   },
   replyPillMessage: {
     fontSize: 12,
     fontFamily: fonts.regular,
-    color: '#8E8E93',
+    color: COLORS.TEXT_TERTIARY,
   },
   replyPillClose: {
     padding: 4,
@@ -1999,14 +2049,11 @@ const styles = StyleSheet.create({
     right: 12,
     top: '50%',
     marginTop: -8,
-    backgroundColor: '#1A1A1A',
-    borderRadius: 12,
+    backgroundColor: COLORS.BACKGROUND_CARD,
+    borderRadius: 10,
     padding: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   // Action Sheet styles - LockerRoom Grade
   actionSheetOverlay: {
@@ -2030,46 +2077,55 @@ const styles = StyleSheet.create({
     elevation: 12,
   },
   actionSheetBlur: {
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    backgroundColor: 'rgba(40, 40, 40, 0.9)',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: COLORS.BACKGROUND_CARD,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
   },
   actionSheetHandle: {
-    width: 36,
+    width: 40,
     height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
     borderRadius: 2,
     alignSelf: 'center',
-    marginTop: 16,
-    marginBottom: 20,
+    marginTop: 12,
+    marginBottom: 16,
   },
   actionSheetItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 16,
+    paddingVertical: 14,
     paddingHorizontal: 20,
-    gap: 12,
+    gap: 14,
+    borderRadius: 12,
+    marginHorizontal: 12,
+    marginVertical: 2,
   },
   actionSheetText: {
     fontSize: 16,
     fontFamily: fonts.medium,
-    color: 'rgba(255, 255, 255, 0.9)',
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: '500',
   },
   actionSheetCancel: {
-    marginTop: 12,
-    marginHorizontal: 20,
+    marginTop: 8,
+    marginHorizontal: 12,
     marginBottom: 40,
     paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#2A2A2A',
-    borderRadius: 14,
+    backgroundColor: COLORS.BACKGROUND_CARD,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   actionSheetCancelText: {
     fontSize: 16,
     fontFamily: fonts.medium,
-    color: '#FFFFFF',
-    letterSpacing: 0.3,
+    color: COLORS.TEXT_PRIMARY,
+    letterSpacing: 0.2,
+    fontWeight: '500',
   },
   // Delete Modal styles
   deleteModalOverlay: {

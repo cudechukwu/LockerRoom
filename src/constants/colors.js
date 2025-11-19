@@ -18,7 +18,7 @@ export const COLORS = {
   DARK_GRAY: '#1C1C1E', // Instagram's dark gray
   
   // Background variations - Dark theme
-  BACKGROUND_PRIMARY: '#0E0E0E', // Main background - very dark gray
+  BACKGROUND_PRIMARY: '#000000', // Main background - aligned with primary black for cohesive look
   BACKGROUND_SECONDARY: '#2A1A1F', // Secondary surfaces with lupine accent
   BACKGROUND_TERTIARY: '#2A2A2F', // Tertiary surfaces with blue tint
   
@@ -31,8 +31,8 @@ export const COLORS = {
   BACKGROUND_SURFACE: '#3A2A2F', // Action sheets, modals
   BACKGROUND_OVERLAY: 'rgba(255, 255, 255, 0.08)', // Search bars, inputs
   BACKGROUND_MUTED: 'rgba(255, 255, 255, 0.05)', // Subtle backgrounds
-  BACKGROUND_CARD: '#161616', // Neutral card backgrounds
-  BACKGROUND_CARD_SECONDARY: '#1A1A1A', // Secondary card backgrounds
+  BACKGROUND_CARD: '#0A0A0A', // Neutral card backgrounds
+  BACKGROUND_CARD_SECONDARY: '#0A0A0A', // Secondary card backgrounds
   
   // UI Text colors
   TEXT_MUTED: '#CCCCCC', // Muted text for UI elements

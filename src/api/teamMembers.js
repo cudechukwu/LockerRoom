@@ -37,16 +37,45 @@ export const fetchTeamMembers = async (teamId, query = '') => {
       return [];
     }
 
-    // For now, return team members with basic info (no user_profiles table needed)
-    const members = teamMembers.map(teamMember => ({
+    const userIds = teamMembers.map(member => member.user_id);
+
+    let profileMap = new Map();
+    if (userIds.length > 0) {
+      const { data: profiles, error: profilesError } = await supabase
+        .from('user_profiles')
+        .select('user_id, display_name, avatar_url')
+        .in('user_id', userIds);
+
+      if (profilesError) {
+        console.error('Error fetching user profile names:', profilesError);
+      } else if (profiles) {
+        profileMap = new Map(profiles.map(profile => [profile.user_id, profile]));
+      }
+    }
+
+    const members = teamMembers.map(teamMember => {
+      const profile = profileMap.get(teamMember.user_id) || {};
+      const displayName = profile.display_name && profile.display_name.trim().length > 0
+        ? profile.display_name.trim()
+        : null;
+
+      const fallbackName = `User ${teamMember.user_id.slice(0, 8)}`;
+      const normalizedName = displayName || fallbackName;
+
+      const normalizedHandle = displayName
+        ? `@${displayName.replace(/\s+/g, '').toLowerCase()}`
+        : `@user_${teamMember.user_id.slice(0, 8)}`;
+
+      return {
       id: teamMember.user_id,
-      name: `User ${teamMember.user_id.slice(0, 8)}`,
-      handle: `@user_${teamMember.user_id.slice(0, 8)}`,
-      role: teamMember.role,
+        name: normalizedName,
+        handle: normalizedHandle,
+        role: teamMember.role || 'Member',
       position: null,
-      avatarUrl: null,
+        avatarUrl: profile.avatar_url || null,
       isActive: true,
-    }));
+      };
+    });
 
     console.log('✅ Processed members:', members);
 

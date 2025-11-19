@@ -33,6 +33,8 @@ import {
   upsertTeamMemberProfile
 } from '../api/profiles';
 import { useProfileData } from '../hooks/useProfileData';
+import { createCallSession, getAgoraToken } from '../api/calling';
+import { useAuthTeam } from '../hooks/useAuthTeam';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -47,6 +49,7 @@ const ProfileScreen = ({ navigation }) => {
   // New React Query hook replaces all the old state management
   const { data, isLoading, isFetching, error } = useProfileData();
   const queryClient = useQueryClient();
+  const { data: authTeam } = useAuthTeam();
   
   // Extract data from hook
   const {
@@ -83,14 +86,17 @@ const ProfileScreen = ({ navigation }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
 
   const insets = useSafeAreaInsets();
   const tabBarHeight = Platform.OS === 'ios' ? 88 : 60;
   const adjustedTabBarHeight = tabBarHeight + Math.max(insets.bottom - 10, 0);
+  const horizontalPadding = Math.max(12, insets.left, insets.right);
 
   // Manual refresh handler with haptic feedback
   const handleManualRefresh = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setIsManualRefreshing(true);
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ['teamInfo'] }),
       queryClient.refetchQueries({ queryKey: ['userProfile'] }),
@@ -98,6 +104,7 @@ const ProfileScreen = ({ navigation }) => {
       queryClient.refetchQueries({ queryKey: ['teamAdminStatus'] }),
       queryClient.refetchQueries({ queryKey: ['playerStats'] }),
     ]);
+    setIsManualRefreshing(false);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
@@ -111,6 +118,11 @@ const ProfileScreen = ({ navigation }) => {
   const handleSignOut = async () => {
     try {
       await supabase.auth.signOut();
+      queryClient.clear();
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'VideoCover' }],
+      });
       // Navigation is handled automatically in App.js via onAuthStateChange
     } catch (error) {
       console.error('Error signing out:', error);
@@ -279,43 +291,17 @@ const ProfileScreen = ({ navigation }) => {
   return (
     <View style={styles.container}>
       <SafeAreaView style={[styles.container, { paddingBottom: adjustedTabBarHeight }]}>
-        {/* Header with Team Logo */}
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Image 
-              source={
-                teamInfo?.logo_url
-                  ? { uri: `${teamInfo.logo_url}?v=${teamInfo.updated_at || Date.now()}` }
-                  : require('../../assets/LockerRoom.png')
-              }
-              style={styles.teamLogo}
-              resizeMode="contain"
-            />
-          </View>
-          <View style={styles.headerRight}>
-          {/* Team Management button for admins */}
-          {isTeamAdmin && (
-            <TouchableOpacity 
-              style={styles.teamManagementButton} 
-              onPress={() => navigation.navigate('TeamManagement')}
-            >
-              <Ionicons name="settings" size={20} color={COLORS.TEXT_MUTED} />
-            </TouchableOpacity>
-          )}
-          </View>
-        </View>
-
         <ScrollView 
           style={styles.content}
           refreshControl={
             <RefreshControl 
-              refreshing={isFetching} 
+              refreshing={isManualRefreshing} 
               onRefresh={handleManualRefresh}
               tintColor={COLORS.TEXT_PRIMARY}
             />
           }
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, { paddingHorizontal: horizontalPadding }]}
         >
           {/* Enhanced Profile Card */}
           <MemoizedEnhancedProfileCard
@@ -349,6 +335,81 @@ const ProfileScreen = ({ navigation }) => {
             onNotifications={handleNotifications}
             onStorageData={handleStorageData}
           />
+
+          {/* Dev Test Button - Group Call Screen */}
+          {__DEV__ && (
+            <View style={styles.testSection}>
+              <Text style={styles.testSectionTitle}>🧪 Dev Test Tools</Text>
+              <TouchableOpacity
+                style={styles.testButton}
+                onPress={async () => {
+                  try {
+                    if (!teamId || !userId) {
+                      Alert.alert('Error', 'Missing team or user info');
+                      return;
+                    }
+
+                    // Get another team member for testing (can't call yourself)
+                    const { data: teamMembers, error: membersError } = await supabase
+                      .from('team_members')
+                      .select('user_id')
+                      .eq('team_id', teamId)
+                      .neq('user_id', userId)
+                      .limit(1);
+
+                    if (membersError || !teamMembers || teamMembers.length === 0) {
+                      Alert.alert(
+                        'Test Call',
+                        'Need at least one other team member to test calls. Add another member to your team first.'
+                      );
+                      return;
+                    }
+
+                    const recipientId = teamMembers[0].user_id;
+
+                    // Create a test call
+                    const { data: callSession, error: sessionError } = await createCallSession(
+                      teamId,
+                      [recipientId],
+                      'video',
+                      null,
+                      { id: userId }
+                    );
+
+                    if (sessionError || !callSession) {
+                      Alert.alert('Error', 'Failed to create test call');
+                      return;
+                    }
+
+                    const { data: tokenData, error: tokenError } = await getAgoraToken(
+                      callSession.id,
+                      { id: userId }
+                    );
+
+                    if (tokenError || !tokenData?.token) {
+                      Alert.alert('Error', 'Failed to get Agora token');
+                      return;
+                    }
+
+                    // Navigate to ActiveCall for 1-on-1, or GroupCall for multi-participant
+                    // For this test, we'll use ActiveCall since it's just one recipient
+                    navigation.navigate('ActiveCall', {
+                      callSessionId: callSession.id,
+                      callType: 'video',
+                      isInitiator: true,
+                      agoraToken: tokenData.token,
+                    });
+                  } catch (err) {
+                    console.error('Test call error:', err);
+                    Alert.alert('Error', err.message || 'Failed to start test call');
+                  }
+                }}
+              >
+                <Ionicons name="videocam" size={20} color={COLORS.WHITE} />
+                <Text style={styles.testButtonText}>Test Group Call Screen</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </ScrollView>
 
         {/* Image Picker Modal */}
@@ -382,30 +443,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.BACKGROUND_PRIMARY, // Match HomeScreen grey background
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8, // Reduced from 20 to bring content closer
-    backgroundColor: 'transparent',
-  },
-  headerLeft: {
-    flex: 1,
-    alignItems: 'flex-start',
-    backgroundColor: 'transparent',
-  },
-  teamLogo: {
-    width: 32,
-    height: 32,
-  },
-  teamManagementButton: {
-    backgroundColor: 'transparent',
-    padding: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   headerTitle: {
     ...TYPOGRAPHY.title,
     color: COLORS.TEXT_PRIMARY,
@@ -424,7 +461,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 75,
+    paddingTop: 8,
+    paddingBottom: 90,
   },
   loadingContainer: {
     flex: 1,
@@ -466,13 +504,13 @@ const styles = StyleSheet.create({
   },
   profileSection: {
     alignItems: 'flex-start',
-    paddingVertical: 24,
+    paddingVertical: 0,
   },
   profileCard: {
     // ProfileCard component handles its own styling
   },
   bioSection: {
-    marginBottom: 24,
+    marginBottom: 12,
   },
   sectionTitle: {
     ...TYPOGRAPHY.sectionTitle,
@@ -485,25 +523,25 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   infoSection: {
-    marginBottom: 24,
+    marginBottom: 12,
   },
   infoGrid: {
-    backgroundColor: COLORS.BACKGROUND_CARD_SECONDARY, // Match HomeScreen nextUpCard background
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: COLORS.BACKGROUND_CARD,
+    borderRadius: 16,
+    padding: 20,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.24,
+    shadowRadius: 12,
+    elevation: 10,
   },
   infoItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.BACKGROUND_MUTED,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255, 255, 255, 0.07)',
   },
   infoLabel: {
     ...TYPOGRAPHY.eventTime, // Match HomeScreen card secondary text
@@ -515,7 +553,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   statsSection: {
-    marginBottom: 24,
+    marginBottom: 12,
   },
   statsGrid: {
     flexDirection: 'row',
@@ -524,17 +562,18 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   statItem: {
-    backgroundColor: COLORS.BACKGROUND_CARD, // Match HomeScreen insightCard background
-    padding: 16,
-    borderRadius: 14, // Match HomeScreen insightCard borderRadius
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    borderRadius: 14,
     alignItems: 'center',
     width: '48%',
     minWidth: 120,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
     shadowRadius: 6,
-    elevation: 4,
+    elevation: 5,
   },
   statValue: {
     ...TYPOGRAPHY.bodyMedium, // Much smaller than insightValue (14px vs 19px)
@@ -547,15 +586,15 @@ const styles = StyleSheet.create({
     flexWrap: 'nowrap', // Prevent wrapping
   },
   completionSection: {
-    backgroundColor: COLORS.BACKGROUND_CARD_SECONDARY, // Match HomeScreen nextUpCard background
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 24,
+    backgroundColor: COLORS.BACKGROUND_CARD,
+    padding: 20,
+    borderRadius: 16,
+    marginBottom: 12,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.24,
+    shadowRadius: 12,
+    elevation: 10,
   },
   completionRow: {
     flexDirection: 'row',
@@ -600,6 +639,30 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.body,
     color: COLORS.WHITE,
     textAlign: 'center',
+  },
+  testSection: {
+    marginTop: 16,
+    marginBottom: 20,
+  },
+  testSectionTitle: {
+    ...TYPOGRAPHY.sectionTitle,
+    marginBottom: 12,
+    color: COLORS.TEXT_PRIMARY,
+  },
+  testButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.PRIMARY_BLACK,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    gap: 8,
+  },
+  testButtonText: {
+    ...TYPOGRAPHY.body,
+    color: COLORS.WHITE,
+    fontWeight: '600',
   },
 });
 

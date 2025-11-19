@@ -6,17 +6,29 @@
 // Field dimensions (matching FootballField component)
 const getFieldDimensions = () => {
   const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = require('react-native').Dimensions.get('window');
-  const CARD_MARGIN = 40;
-  const CARD_WIDTH = SCREEN_WIDTH - (CARD_MARGIN * 2);
-  const CARD_PADDING = 16;
-  const FIELD_HEIGHT = SCREEN_HEIGHT * 0.50;
-  const FIELD_WIDTH = FIELD_HEIGHT * 0.53;
   
-  // Calculate actual field boundaries
-  const fieldLeft = -100;
-  const fieldRight = SCREEN_WIDTH + 100;
-  const fieldTop = -50;
-  const fieldBottom = FIELD_HEIGHT + 50;
+  // Calculate responsive constants based on screen size (all percentage-based)
+  const CARD_MARGIN = SCREEN_WIDTH * 0.015; // 1.5% of screen width for minimal padding
+  const CARD_WIDTH = SCREEN_WIDTH - (CARD_MARGIN * 2);
+  const CARD_PADDING = SCREEN_WIDTH * 0.01; // 1% of screen width for minimal padding
+  // Calculate field height to fill available viewport space from header to bottom
+  // Account for header (~10%), controls (~30% when visible), and safe areas (~2% total)
+  const headerHeight = SCREEN_HEIGHT * 0.10; // ~10% for header
+  const controlsHeight = SCREEN_HEIGHT * 0.30; // ~30% for controls when visible
+  const safeAreaBuffer = SCREEN_HEIGHT * 0.02; // ~2% for safe areas (minimal)
+  const availableHeight = SCREEN_HEIGHT - headerHeight - controlsHeight - safeAreaBuffer;
+  const FIELD_HEIGHT = availableHeight * 0.98; // Use 98% of available space to maximize field size
+  const FIELD_WIDTH = Math.min(SCREEN_WIDTH * 0.96, FIELD_HEIGHT * 0.85); // Much wider field (96% of screen width)
+  
+  // Calculate extension values as percentage of screen size
+  const extendX = SCREEN_WIDTH * 0.26; // 26% of screen width for horizontal extension
+  const extendY = SCREEN_HEIGHT * 0.07; // 7% of screen height for vertical extension
+  
+  // Calculate actual field boundaries (all percentage-based)
+  const fieldLeft = -extendX;
+  const fieldRight = SCREEN_WIDTH + extendX;
+  const fieldTop = -extendY;
+  const fieldBottom = FIELD_HEIGHT + extendY;
   
   return {
     fieldLeft,

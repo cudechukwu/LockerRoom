@@ -225,23 +225,24 @@ const EnhancedProfileCard = ({
 const styles = StyleSheet.create({
   profileContainer: {
     position: 'relative',
+    width: '100%',
   },
   
   // Player Profile Styles
   heroSection: {
-    backgroundColor: COLORS.BACKGROUND_CARD_SECONDARY, // Match HomeScreen nextUpCard background
-    padding: 20,
-    marginHorizontal: 20,
-    marginTop: 8, // Reduced from 20 to bring closer to header
-    marginBottom: 20,
+    backgroundColor: COLORS.BACKGROUND_CARD,
+    padding: 24,
+    marginHorizontal: 0,
+    marginTop: 0,
+    marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 16,
+    borderRadius: 18,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 10,
   },
   backgroundPattern: {
     position: 'absolute',
@@ -292,17 +293,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   playerStatCard: {
-    backgroundColor: COLORS.BACKGROUND_CARD, // Match HomeScreen insightCard background
-    padding: 8,
-    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    paddingVertical: 10,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 2,
+    shadowRadius: 6,
+    elevation: 5,
   },
   playerStatValue: {
     ...TYPOGRAPHY.bodyMedium, // Much smaller than insightValue (14px vs 19px)
@@ -321,19 +322,19 @@ const styles = StyleSheet.create({
   
   // Staff Profile Styles
   staffHeroSection: {
-    backgroundColor: COLORS.BACKGROUND_CARD_SECONDARY, // Match HomeScreen nextUpCard background
-    padding: 20,
-    marginHorizontal: 20,
-    marginTop: 8, // Reduced from 20 to bring closer to header
-    marginBottom: 20,
+    backgroundColor: COLORS.BACKGROUND_CARD,
+    padding: 24,
+    marginHorizontal: 0,
+    marginTop: 0,
+    marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 16,
+    borderRadius: 18,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 10,
   },
   staffImageContainer: {
     marginRight: 20,
@@ -368,19 +369,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   staffStatCard: {
-    backgroundColor: COLORS.BACKGROUND_CARD, // Match HomeScreen insightCard background
-    padding: 8,
-    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    paddingVertical: 10,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
     minWidth: 90, // Increased minimum width
     height: 75, // Fixed height for uniform appearance
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 2,
+    shadowRadius: 6,
+    elevation: 5,
   },
   staffStatValue: {
     ...TYPOGRAPHY.bodyMedium, // Much smaller than insightValue (14px vs 19px)

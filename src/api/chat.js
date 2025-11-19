@@ -457,25 +457,7 @@ export async function getChannelMembers(channelId, teamId = null) {
 // MESSAGE ENDPOINTS
 // =============================================
 
-/**
- * Get messages for a channel with cursor-based pagination
- * @param {string} channelId - Channel ID
- * @param {Object} options - Pagination options
- * @returns {Promise<Object>} Messages and pagination info
- */
-export async function getMessages(channelId, options = {}) {
-  try {
-    const { limit = 50, after } = options;
-    
-    // Note: Tombstone filtering is temporarily disabled to simplify
-    // The Supabase query builder has issues with complex NOT IN filters
-    
-    const { data: { user } } = await supabase.auth.getUser();
-    const currentUserId = user?.id;
-
-    const { data, error } = await supabase
-      .from('messages')
-      .select(`
+const MESSAGE_SELECT_FIELDS = `
         id,
         content,
         message_type,
@@ -485,6 +467,10 @@ export async function getMessages(channelId, options = {}) {
         updated_at,
         sender_id,
         reply_to_message_id,
+  parent_message_id,
+  thread_reply_count,
+  last_thread_reply_at,
+  thread_last_reply_author_id,
         sender_profile:user_profiles!sender_id(
           display_name,
           avatar_url,
@@ -507,8 +493,43 @@ export async function getMessages(channelId, options = {}) {
           user_id,
           read_at
         )
-      `)
+`;
+
+const normalizeMessages = (messages = [], currentUserId) =>
+  (messages || []).map((message) => {
+    const isRead = message?.message_reads?.some((read) => read.user_id === currentUserId) || false;
+
+    return {
+      ...message,
+      is_read: isRead,
+      message_reads: undefined,
+      message_attachments: message?.message_attachments || [],
+      reactions: message?.reactions || [],
+      thread_reply_count: message?.thread_reply_count ?? 0,
+    };
+  });
+
+/**
+ * Get messages for a channel with cursor-based pagination
+ * @param {string} channelId - Channel ID
+ * @param {Object} options - Pagination options
+ * @returns {Promise<Object>} Messages and pagination info
+ */
+export async function getMessages(channelId, options = {}) {
+  try {
+    const { limit = 50, after } = options;
+    
+    // Note: Tombstone filtering is temporarily disabled to simplify
+    // The Supabase query builder has issues with complex NOT IN filters
+    
+    const { data: { user } } = await supabase.auth.getUser();
+    const currentUserId = user?.id;
+
+    const { data, error } = await supabase
+      .from('messages')
+      .select(MESSAGE_SELECT_FIELDS)
       .eq('channel_id', channelId)
+      .is('parent_message_id', null) // Only fetch top-level messages (hide thread replies)
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -516,16 +537,7 @@ export async function getMessages(channelId, options = {}) {
 
     // Reverse to get chronological order
     const messages = data?.reverse() || [];
-
-    // Post-process messages to add is_read flag
-    const messagesWithReadStatus = messages.map(message => {
-      const isRead = message.message_reads?.some(read => read.user_id === currentUserId) || false;
-      return {
-        ...message,
-        is_read: isRead,
-        message_reads: undefined // Remove from final object
-      };
-    });
+    const messagesWithReadStatus = normalizeMessages(messages, currentUserId);
 
     return { 
       data: messagesWithReadStatus, 
@@ -535,6 +547,51 @@ export async function getMessages(channelId, options = {}) {
     };
   } catch (error) {
     console.error('Error fetching messages:', error);
+    return { data: null, error };
+  }
+}
+
+export async function getThreadMessages(parentMessageId) {
+  try {
+    if (!parentMessageId) {
+      throw new Error('Parent message ID is required');
+    }
+
+    const { data: { user } } = await supabase.auth.getUser();
+    const currentUserId = user?.id;
+
+    if (!currentUserId) {
+      throw new Error('User not authenticated');
+    }
+
+    const { data: parentRow, error: parentError } = await supabase
+      .from('messages')
+      .select(MESSAGE_SELECT_FIELDS)
+      .eq('id', parentMessageId)
+      .single();
+
+    if (parentError) throw parentError;
+
+    const { data: replyRows, error: repliesError } = await supabase
+      .from('messages')
+      .select(MESSAGE_SELECT_FIELDS)
+      .eq('parent_message_id', parentMessageId)
+      .order('created_at', { ascending: true });
+
+    if (repliesError) throw repliesError;
+
+    const parent = normalizeMessages([parentRow], currentUserId)[0];
+    const replies = normalizeMessages(replyRows, currentUserId);
+
+    return {
+      data: {
+        parent,
+        replies,
+      },
+      error: null,
+    };
+  } catch (error) {
+    console.error('Error fetching thread messages:', error);
     return { data: null, error };
   }
 }
@@ -551,40 +608,43 @@ export async function sendMessage(channelId, messageData, attachments = []) {
     const user = (await supabase.auth.getUser()).data.user;
     if (!user) throw new Error('User not authenticated');
 
-    // Get team_id from channel
-    const { data: channel, error: channelError } = await supabase
-      .from('channels')
-      .select('team_id')
-      .eq('id', channelId)
-      .single();
-
-    if (channelError) throw channelError;
-
     // Create message first
-    const { data: message, error: messageError } = await supabase
-      .from('messages')
-      .insert({
-        channel_id: channelId,
-        team_id: channel.team_id,
-        sender_id: user.id,
-        content: messageData.content,
-        message_type: messageData.message_type || 'text',
-        reply_to_message_id: messageData.reply_to_message_id || null
-      })
-      .select(`
-        id,
-        content,
-        message_type,
-        is_edited,
-        is_pinned,
-        created_at,
-        updated_at,
-        sender_id,
-        reply_to_message_id
-      `)
-      .single();
+    // Use ?? to ensure we pass null (not undefined) to Supabase RPC
+    const parentMessageId = 
+      messageData?.parent_message_id ?? 
+      messageData?.reply_to_message_id ?? 
+      null;
+    
+    console.log('📤 Calling send_channel_message RPC:', {
+      channelId,
+      hasContent: !!messageData.content,
+      messageType: messageData.message_type,
+      parentMessageId,
+      isReply: !!parentMessageId,
+    });
+    
+    const { data: rpcData, error: rpcError } = await supabase.rpc(
+      'send_channel_message',
+      {
+        p_channel_id: channelId,
+        p_content: messageData.content ?? null,
+        p_message_type: messageData.message_type || 'text',
+        p_parent_message_id: parentMessageId ?? null, // Explicit null fallback
+      }
+    );
 
-    if (messageError) throw messageError;
+    if (rpcError) throw rpcError;
+
+    // When the function returns plain row vs object, normalise the shape
+    const messagePayload = rpcData?.message ?? rpcData;
+    const parentPayload = rpcData?.parent ?? null;
+
+    if (!messagePayload) {
+      throw new Error('send_channel_message returned no message payload');
+    }
+
+    const message = { ...messagePayload };
+    const teamId = message.team_id;
 
     // Upload attachments if any (using React Native compatible approach)
     if (attachments && attachments.length > 0) {
@@ -635,7 +695,7 @@ export async function sendMessage(channelId, messageData, attachments = []) {
               .from('message_attachments')
               .insert({
                 message_id: message.id,
-                team_id: channel.team_id,
+                team_id: teamId,
                 filename: attachment.name || fileName,
                 file_type: 'image/jpeg',
                 file_size: fileSize, // Use calculated file size
@@ -662,9 +722,36 @@ export async function sendMessage(channelId, messageData, attachments = []) {
       // Filter out failed uploads
       const successfulAttachments = uploadedAttachments.filter(a => a !== null);
       console.log('✅ Uploaded attachments:', successfulAttachments.length);
+
+      if (successfulAttachments.length > 0) {
+        const normalized = successfulAttachments.map(att => ({
+          id: att.id,
+          filename: att.filename,
+          file_type: att.file_type,
+          file_size: att.file_size,
+          s3_url: att.s3_url,
+          thumbnail_url: att.thumbnail_url,
+        }));
+        message.attachments = normalized;
+        message.message_attachments = normalized;
+      }
     }
 
-    return { data: message, error: null };
+    message.reactions = message.reactions || [];
+    message.thread_reply_count = message.thread_reply_count ?? 0;
+    message.message_attachments = message.message_attachments || message.attachments || [];
+
+    if (parentPayload) {
+      parentPayload.reactions = parentPayload.reactions || [];
+      parentPayload.thread_reply_count = parentPayload.thread_reply_count ?? 0;
+      parentPayload.message_attachments = parentPayload.message_attachments || parentPayload.attachments || [];
+    }
+
+    return {
+      data: message,
+      parent: parentPayload,
+      error: null,
+    };
   } catch (error) {
     console.error('Error sending message:', error);
     return { data: null, error };

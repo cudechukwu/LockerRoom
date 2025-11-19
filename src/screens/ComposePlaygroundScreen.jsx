@@ -88,7 +88,8 @@ const ComposePlaygroundScreen = ({ navigation }) => {
       is_edited: false,
       reactions: [],
       attachments: attachments,
-      reply_to_message_id: replyToMessage?.id || null
+      reply_to_message_id: replyToMessage?.id || null,
+      parent_message_id: replyToMessage?.id || null,
     };
 
     setMessages(prev => [...prev, newMessage]);
@@ -186,8 +187,9 @@ const ComposePlaygroundScreen = ({ navigation }) => {
       };
     });
 
-    const parentMessage = item.reply_to_message_id ? 
-      messages.find(msg => msg.id === item.reply_to_message_id) : null;
+    const parentId = item.parent_message_id ?? item.reply_to_message_id;
+    const parentMessage = parentId ? 
+      messages.find(msg => msg.id === parentId) : null;
 
     return (
       <PanGestureHandler

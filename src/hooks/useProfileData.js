@@ -25,6 +25,18 @@ export const useProfileData = () => {
   const { data: ids, isLoading: idsLoading, error: idsError } = useAuthTeam();
   const teamId = ids?.teamId;
   const userId = ids?.userId;
+
+  // Debug logging
+  React.useEffect(() => {
+    console.log('👤 useProfileData state:', {
+      idsLoading,
+      hasIds: !!ids,
+      teamId,
+      userId,
+      hasError: !!idsError,
+      errorMessage: idsError?.message,
+    });
+  }, [idsLoading, ids, teamId, userId, idsError]);
   const cacheKey = CACHE_KEYS.PROFILE_DATA(userId);
 
   // Check persistent + memory cache before query

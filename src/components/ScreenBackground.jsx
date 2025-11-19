@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
+import { COLORS } from '../constants/colors';
 
 const ScreenBackground = ({ children, style }) => {
   return (
@@ -12,7 +13,7 @@ const ScreenBackground = ({ children, style }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0E0E0E', // Match HomeScreen and other screens
+    backgroundColor: COLORS.BACKGROUND_PRIMARY, // Use consistent background color
   },
 });
 

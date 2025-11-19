@@ -118,7 +118,7 @@ const ChipPalette = ({ onChipSelect, selectedChip, onChipPress, isDrawingRoute, 
                   <PlayerChip
                     position={position.pos}
                     color={group.color}
-                    size={32}
+                    size={26}
                     isSelected={selectedPosition === position.pos}
                     onPress={() => handleChipSelect(position.pos)}
                     isDraggable={false}
@@ -131,19 +131,10 @@ const ChipPalette = ({ onChipSelect, selectedChip, onChipPress, isDrawingRoute, 
         ))}
       </ScrollView>
       
-      {selectedPosition ? (
+      {selectedPosition && (
         <View style={styles.selectedInfo}>
           <Text style={styles.selectedText}>
             Selected: {selectedPosition}
-          </Text>
-          <Text style={styles.instructionText}>
-            Drag to field to place player
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.selectedInfo}>
-          <Text style={styles.instructionText}>
-            Tap a position to select, then drag to field
           </Text>
         </View>
       )}
@@ -154,109 +145,110 @@ const ChipPalette = ({ onChipSelect, selectedChip, onChipPress, isDrawingRoute, 
 const styles = StyleSheet.create({
   container: {
     backgroundColor: 'transparent',
-    paddingVertical: 8,
-    paddingBottom: 8,
+    paddingVertical: 4,
+    paddingTop: 12,
+    paddingBottom: 4,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    marginBottom: 8,
+    paddingHorizontal: 16,
+    marginBottom: 4,
   },
   headerLeft: {
     flex: 1,
   },
   headerTitle: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
     color: '#FFFFFF',
-    marginBottom: 3,
+    marginBottom: 2,
   },
   headerSubtitle: {
-    fontSize: 11,
+    fontSize: 9,
     color: '#CCCCCC',
   },
   scrollContent: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
   },
   groupContainer: {
-    marginRight: 24,
-    minWidth: 200,
+    marginRight: 16,
+    minWidth: 160,
   },
   groupHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   groupColorIndicator: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 8,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
   },
   groupTitle: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '600',
     color: '#CCCCCC',
   },
   positionsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    paddingBottom: 35,
+    gap: 6,
+    paddingBottom: 28,
   },
   chipContainer: {
     alignItems: 'center',
-    width: 50,
+    width: 40,
   },
   paletteChip: {
-    marginBottom: 12,
+    marginBottom: 6,
   },
   selectedInfo: {
     backgroundColor: '#2A2A2A',
-    marginHorizontal: 20,
-    marginTop: 8,
+    marginHorizontal: 16,
+    marginTop: 4,
     marginBottom: 2,
-    padding: 10,
-    borderRadius: 6,
+    padding: 6,
+    borderRadius: 4,
   },
   selectedText: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '600',
     color: '#FFFFFF',
-    marginBottom: 2,
+    marginBottom: 1,
   },
   instructionText: {
-    fontSize: 10,
+    fontSize: 9,
     color: '#FFFFFF',
   },
   routeButtons: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
   },
   completeButton: {
     backgroundColor: '#2A2A2A',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: 4,
   },
   completeButtonText: {
     color: '#FFFFFF',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '600',
   },
   cancelButton: {
     backgroundColor: 'transparent',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: 4,
     borderWidth: 1,
     borderColor: '#CCCCCC',
   },
   cancelButtonText: {
     color: '#CCCCCC',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '600',
   },
 });

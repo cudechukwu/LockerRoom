@@ -57,7 +57,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.BACKGROUND_PRIMARY,
-    paddingHorizontal: 20,
+    paddingHorizontal: 12,
   },
   header: {
     flexDirection: 'row',
@@ -65,7 +65,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingTop: 12,
     paddingBottom: 8,
-    marginBottom: 20,
+    marginBottom: 12,
   },
   logoSkeleton: {
     width: 32,

@@ -169,7 +169,12 @@ export function useAgoraEngine(callSession, options = {}) {
    */
   const initialize = useCallback(async () => {
     if (!isAgoraConfigured()) {
-      const err = new Error('Agora is not configured. Please check your environment variables.');
+      const err = new Error('Agora is not configured. Please add EXPO_PUBLIC_AGORA_APP_ID to your .env file.');
+      console.error('❌ Agora configuration error:', err.message);
+      console.error('📋 Fix: Add EXPO_PUBLIC_AGORA_APP_ID=your_app_id to your .env file');
+      console.error('📋 Note: This is different from Supabase secrets. You need BOTH:');
+      console.error('   1. EXPO_PUBLIC_AGORA_APP_ID in .env (for client-side SDK)');
+      console.error('   2. AGORA_APP_ID and AGORA_APP_CERTIFICATE as Supabase secrets (for Edge Function)');
       setError(err);
       onError?.(err);
       throw err;

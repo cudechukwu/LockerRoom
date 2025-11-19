@@ -455,6 +455,8 @@ const CreateChannelModal = ({ visible, onClose, teamId, onChannelCreated }) => {
                                   removeClippedSubviews={false}
                                   renderItem={({ item }) => {
                                     const isSelected = selectedMembers.some(m => m.id === item.id);
+                                    const memberInitial = item.name?.charAt(0)?.toUpperCase() || '?';
+                                    const metaLine = [item.handle, item.role].filter(Boolean).join(' • ');
                                     return (
                                       <TouchableOpacity
                                         style={styles.memberItem}
@@ -462,15 +464,22 @@ const CreateChannelModal = ({ visible, onClose, teamId, onChannelCreated }) => {
                                         activeOpacity={0.7}
                                       >
                                         <View style={styles.memberAvatar}>
+                                          {item.avatarUrl ? (
+                                            <Image
+                                              source={{ uri: `${item.avatarUrl}?t=${Date.now()}` }}
+                                              style={styles.memberAvatarImage}
+                                            />
+                                          ) : (
                                           <Text style={styles.memberAvatarText}>
-                                            {item.name.charAt(0).toUpperCase()}
+                                              {memberInitial}
                                           </Text>
+                                          )}
                                         </View>
                                         <View style={styles.memberInfo}>
                                           <Text style={styles.memberName}>{item.name}</Text>
-                                          <Text style={styles.memberRole}>
-                                            {item.position ? `${item.position} • ${item.role}` : item.role}
-                                          </Text>
+                                          {metaLine.length > 0 && (
+                                            <Text style={styles.memberMeta}>{metaLine}</Text>
+                                          )}
                                         </View>
                                         <View style={styles.memberActions}>
                                           {isSelected && (
@@ -789,6 +798,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    overflow: 'hidden',
+  },
+  memberAvatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 20,
   },
   memberAvatarText: {
     fontSize: getFontSize('BASE'),
@@ -804,11 +819,11 @@ const styles = StyleSheet.create({
     color: '#3A3A3E',
     marginBottom: 2,
   },
-  memberRole: {
+  memberMeta: {
     fontSize: getFontSize('XS'),
     fontWeight: getFontWeight('REGULAR'),
     color: '#5A5A5F',
-    textTransform: 'capitalize',
+    textTransform: 'none',
   },
   memberActions: {
     width: 20,

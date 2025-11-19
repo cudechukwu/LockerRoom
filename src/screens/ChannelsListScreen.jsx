@@ -1052,13 +1052,13 @@ const ChannelsListScreen = ({ navigation, route }) => {
 const styles = StyleSheet.create({
   wrapper: {
     flex: 1,
-    backgroundColor: '#0E0E0E',
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
   },
   container: {
     flex: 1,
   },
   unifiedHeader: {
-    backgroundColor: '#0E0E0E',
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
     paddingTop: 12,
     paddingBottom: 8,
   },
@@ -1175,7 +1175,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: '#2A2A2A',
     borderWidth: 2.5,
-    borderColor: '#0E0E0E',
+    borderColor: COLORS.BACKGROUND_PRIMARY,
   },
   channelInfo: {
     flex: 1,

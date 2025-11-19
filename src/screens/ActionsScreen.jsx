@@ -76,7 +76,10 @@ const ActionsScreen = ({ navigation }) => {
     
     switch (action.id) {
       case 'calendar':
-        navigation.navigate('Calendar');
+        navigation.navigate('Calendar', {
+          initialView: 'day',
+          initialDate: new Date().toISOString(),
+        });
         break;
       case 'notes':
         // TODO: Navigate to Notes screen

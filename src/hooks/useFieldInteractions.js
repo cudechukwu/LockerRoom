@@ -5,6 +5,11 @@
 
 import { useCallback } from 'react';
 import { createPlayer, createRouteSegment, addRouteToPlayer } from '../utils/playerDataModel';
+import { 
+  checkFormationCollisions, 
+  detectOffensiveStrongSide,
+  getFormationWithStrongSide 
+} from '../utils/footballFormations';
 
 /**
  * Main field interactions hook
@@ -181,9 +186,98 @@ export function useFieldInteractions(players, setPlayers, fieldGeometry, interac
     }));
   }, [setInteractionState]);
 
+  /**
+   * Place a formation on the field
+   * @param {Object} formation - Formation object from footballFormations
+   * @param {Object} centerLocation - { x: number, y: number } in pixels (center point)
+   * @returns {boolean} - Whether placement was successful
+   */
+  const placeFormation = useCallback((formation, centerLocation) => {
+    if (!formation || !centerLocation || !formation.players) return false;
+
+    // Convert center point to normalized coordinates
+    const normalizedCenter = fieldGeometry.pixelsToNormalized(centerLocation);
+    
+    // For defensive formations, auto-detect offensive strong side and orient defense
+    let formationToPlace = formation;
+    if (formation.type === 'defense' && formation.hasStrongSide) {
+      const detectedStrongSide = detectOffensiveStrongSide(players);
+      if (detectedStrongSide) {
+        // Auto-orient defense based on offensive strong side
+        // Defense should align SAM to TE (strong side), WILL to weak side
+        formationToPlace = getFormationWithStrongSide(formation, detectedStrongSide);
+        console.log(`Auto-oriented defense to match offensive strong side: ${detectedStrongSide}`);
+      }
+    }
+    
+    // Check for collisions before placing
+    const collisionCheck = checkFormationCollisions(
+      formationToPlace,
+      normalizedCenter,
+      players,
+      fieldGeometry
+    );
+
+    if (collisionCheck.hasCollision) {
+      // Log collisions for debugging
+      console.warn('Formation placement blocked by collisions:', collisionCheck.collisions);
+      return false;
+    }
+
+    // Create all players in the formation with unique IDs
+    const baseTimestamp = Date.now();
+    const isDefense = formationToPlace.type === 'defense';
+    
+    const newPlayers = formationToPlace.players.map((playerDef, index) => {
+      // Calculate player position relative to center
+      const playerX = normalizedCenter.x + playerDef.offsetX;
+      
+      // For defensive formations, flip Y coordinates so they face the offense
+      // Defense should have DL in front (closer to offense) and LBs/DBs behind
+      // If offense is at bottom (higher Y), defense DL should be at higher Y, LBs at lower Y
+      const playerY = isDefense 
+        ? normalizedCenter.y - playerDef.offsetY  // Flip Y: DL (offsetY=0) stays at center, LBs (positive offsetY) go behind
+        : normalizedCenter.y + playerDef.offsetY; // Offense: players go deeper (positive offsetY)
+
+      // Clamp to field boundaries
+      const clampedAnchor = {
+        x: Math.max(0, Math.min(1, playerX)),
+        y: Math.max(0, Math.min(1, playerY))
+      };
+
+      // Generate unique ID by combining timestamp with index and random component
+      const uniqueId = `player_${baseTimestamp}_${index}_${Math.random().toString(36).slice(2, 11)}`;
+
+      // Create player with position and unique ID
+      const player = createPlayer({
+        position: playerDef.position,
+        anchor: clampedAnchor,
+        id: uniqueId
+      });
+
+      // Add label if provided (e.g., "WR1", "QB", "SAM")
+      if (playerDef.label) {
+        // Store label in player data for potential future use
+        player.label = playerDef.label;
+      }
+
+      // Store group information for potential group operations
+      if (playerDef.group) {
+        player.group = playerDef.group;
+      }
+
+      return player;
+    });
+
+    // Add all players to the field
+    setPlayers(prev => [...prev, ...newPlayers]);
+    return true;
+  }, [fieldGeometry, players, setPlayers]);
+
   return {
     // Player operations
     placePlayer,
+    placeFormation,
     deletePlayer,
     selectPlayer,
     clearAll,

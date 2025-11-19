@@ -25,6 +25,7 @@ import { BlurView } from 'expo-blur';
 import Svg, { Circle } from 'react-native-svg';
 import { useHomeData } from '../hooks/useHomeData';
 import { useQueryClient } from '@tanstack/react-query';
+import { supabase } from '../lib/supabase';
 
 const { width } = Dimensions.get('window');
 
@@ -95,6 +96,7 @@ const HomeScreen = ({ navigation }) => {
   
   // Local state for UI interactions
   const [isGameDay, setIsGameDay] = useState(false); // Mock game day state
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
 
   // Fallback data
   const fallbackLogo = require('../../assets/cardinal.png');
@@ -105,7 +107,26 @@ const HomeScreen = ({ navigation }) => {
     if (error) {
       console.error('HomeScreen error:', error);
       if (!error._alertShown) {
-        Alert.alert('Error', 'Failed to load team data. Please try again.');
+        const errorMessage = error.message || '';
+        if (errorMessage.includes('NO_SESSION') || errorMessage.includes('NO_USER') || errorMessage.includes('Auth session missing')) {
+          Alert.alert(
+            'Session Expired',
+            'Your session has expired. Please sign in again.',
+            [
+              {
+                text: 'Sign In',
+                onPress: () => {
+                  // Navigation will be handled by App.js onAuthStateChange
+                  supabase.auth.signOut();
+                },
+              },
+            ]
+          );
+        } else if (errorMessage.includes('NO_TEAM') || errorMessage.includes('INVALID_TEAM_ID')) {
+          Alert.alert('Team Error', 'You are not a member of any team. Please contact your administrator.');
+        } else {
+          Alert.alert('Error', 'Failed to load team data. Please try again.');
+        }
         error._alertShown = true; // Prevent repeated alerts
       }
     }
@@ -114,6 +135,7 @@ const HomeScreen = ({ navigation }) => {
   // Manual refresh with haptic feedback using React Query
   const handleManualRefresh = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setIsManualRefreshing(true);
     
     // Refetch queries to ensure spinner stays until data is actually refreshed
     await Promise.all([
@@ -123,6 +145,7 @@ const HomeScreen = ({ navigation }) => {
       queryClient.refetchQueries({ queryKey: ['profile'] }),
     ]);
     
+    setIsManualRefreshing(false);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
@@ -196,17 +219,26 @@ const HomeScreen = ({ navigation }) => {
         </View>
         
         <View style={styles.headerRight}>
+          {teamInfo?.logo_url && (
           <TouchableOpacity 
-            style={styles.notificationButton}
-            onPress={() => navigation.navigate('Notifications')}
+              style={[styles.switchTeamHeaderButton, styles.switchTeamHeaderButtonLogo]}
+              onPress={() => navigation.navigate('TeamPicker')}
           >
-            <Ionicons name="notifications-outline" size={26} color="#FFFFFF" />
-            {notificationCount > 0 && (
-              <View style={styles.notificationBadge}>
-                <Text style={styles.notificationBadgeText}>{notificationCount}</Text>
-              </View>
-            )}
+              <Image
+                source={{ uri: `${teamInfo.logo_url}?v=${teamInfo.updated_at || Date.now()}` }}
+                style={styles.switchTeamLogo}
+                resizeMode="contain"
+              />
+            </TouchableOpacity>
+          )}
+          {!teamInfo?.logo_url && (
+          <TouchableOpacity
+            style={styles.switchTeamHeaderButton}
+            onPress={() => navigation.navigate('TeamPicker')}
+          >
+              <Ionicons name="people-outline" size={22} color={COLORS.TEXT_PRIMARY} />
           </TouchableOpacity>
+          )}
         </View>
       </View>
     );
@@ -540,8 +572,43 @@ const HomeScreen = ({ navigation }) => {
   );
 
   // Show skeleton only when there's no cached data (first-time load)
-  if (isLoading) {
+  // But if we have an error, show error state instead
+  if (isLoading && !error) {
     return <SkeletonLoader />;
+  }
+  
+  // If we have an error and no data, show error state
+  if (error && !data?.teamId) {
+    return (
+      <View style={styles.container}>
+        <SafeAreaView style={[styles.safeArea, { paddingBottom: adjustedTabBarHeight }]}>
+          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <Text style={{ color: COLORS.TEXT_PRIMARY, fontSize: 18, marginBottom: 10, textAlign: 'center' }}>
+              {error.message?.includes('NO_SESSION') || error.message?.includes('NO_USER') 
+                ? 'Session Expired'
+                : error.message?.includes('NO_TEAM') || error.message?.includes('INVALID_TEAM_ID')
+                ? 'Team Not Found'
+                : 'Failed to Load Data'}
+            </Text>
+            <Text style={{ color: COLORS.TEXT_MUTED, fontSize: 14, textAlign: 'center', marginBottom: 20 }}>
+              {error.message?.includes('NO_SESSION') || error.message?.includes('NO_USER')
+                ? 'Please sign in again.'
+                : error.message?.includes('NO_TEAM') || error.message?.includes('INVALID_TEAM_ID')
+                ? 'You are not a member of any team.'
+                : error.message || 'Please try again.'}
+            </Text>
+            {(error.message?.includes('NO_SESSION') || error.message?.includes('NO_USER')) && (
+              <TouchableOpacity
+                style={{ backgroundColor: COLORS.BRAND_ACCENT, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 }}
+                onPress={() => supabase.auth.signOut()}
+              >
+                <Text style={{ color: '#fff', fontWeight: 'bold' }}>Sign In</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </SafeAreaView>
+      </View>
+    );
   }
 
   return (
@@ -556,7 +623,7 @@ const HomeScreen = ({ navigation }) => {
           alwaysBounceVertical={true}
           refreshControl={
             <RefreshControl
-              refreshing={isFetching}
+              refreshing={isManualRefreshing}
               onRefresh={handleManualRefresh}
               tintColor={COLORS.TEXT_PRIMARY}
               titleColor={COLORS.TEXT_PRIMARY}
@@ -631,24 +698,21 @@ const styles = StyleSheet.create({
   refreshButton: {
     padding: 4,
   },
-  notificationButton: {
-    position: 'relative',
-    padding: 4,
-  },
-  notificationBadge: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    backgroundColor: '#FF3B30',
-    borderRadius: 10,
-    minWidth: 18,
-    height: 18,
+  switchTeamHeaderButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    overflow: 'hidden',
   },
-  notificationBadgeText: {
-    ...TYPOGRAPHY.notificationBadge,
+  switchTeamHeaderButtonLogo: {
+    backgroundColor: 'transparent',
+  },
+  switchTeamLogo: {
+    width: '100%',
+    height: '100%',
   },
   content: {
     flex: 1,
@@ -665,7 +729,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   nextUpCardNew: {
-    backgroundColor: '#161616',
+    backgroundColor: COLORS.BACKGROUND_CARD,
     borderRadius: 20,
     paddingVertical: 18,
     paddingHorizontal: 20,
@@ -706,7 +770,7 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.gameMode,
   },
   nextUpCard: {
-    backgroundColor: '#1A1A1A',
+    backgroundColor: COLORS.BACKGROUND_CARD_SECONDARY,
     borderRadius: 12,
     padding: 16,
     shadowOpacity: 0.1,
@@ -766,7 +830,7 @@ const styles = StyleSheet.create({
     paddingRight: 4,
   },
   insightCard: {
-    backgroundColor: '#161616',
+    backgroundColor: COLORS.BACKGROUND_CARD,
     borderRadius: 14,
     paddingVertical: 11,
     paddingHorizontal: 13,
@@ -804,7 +868,7 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.insightSubtext,
   },
   statCard: {
-    backgroundColor: '#1A1A1A',
+    backgroundColor: COLORS.BACKGROUND_CARD_SECONDARY,
     borderRadius: 10,
     paddingVertical: 12,
     paddingLeft: 12,
@@ -888,7 +952,7 @@ const styles = StyleSheet.create({
     ...TYPOGRAPHY.calendarEvent,
   },
   feedItemCard: {
-    backgroundColor: '#161616',
+    backgroundColor: COLORS.BACKGROUND_CARD,
     borderRadius: 12,
     padding: 14,
     marginBottom: 8,

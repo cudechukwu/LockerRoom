@@ -13,7 +13,7 @@ const SkeletonBox = ({ width, height, borderRadius = 4, style }) => (
       {
         width,
         height,
-        backgroundColor: 'rgba(255, 255, 255, 0.08)',
+        backgroundColor: COLORS.BACKGROUND_CARD,
         borderRadius,
       },
       style,
@@ -68,7 +68,7 @@ const ChannelsSkeletonLoader = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.PRIMARY_BLACK,
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
   },
   header: {
     paddingHorizontal: isTablet ? 24 : 20,

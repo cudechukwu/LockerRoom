@@ -180,8 +180,9 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
       
       if (cachedMessages && cachedMessages.length > 0) {
         console.log('💬 Using PERSISTENT cached messages for DM, instant render');
-        // Show cached immediately
-        setMessages(cachedMessages);
+        // Filter out thread replies from cached messages
+        const filteredCached = cachedMessages.filter((msg) => !msg.parent_message_id);
+        setMessages(filteredCached);
         setMessagesLoading(false);
         
         // Refresh in background
@@ -191,7 +192,9 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
           return;
         }
         
-        const messagesWithNames = (data || []).map((message) => {
+        const messagesWithNames = (data || [])
+          .filter((message) => !message.parent_message_id) // Filter out thread replies
+          .map((message) => {
           const { message_attachments, sender_profile, ...rest } = message;
           return {
             ...rest,
@@ -219,7 +222,9 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
       // currentUserId is already set in getCurrentUser()
       
       // Use real sender data from the sender_profile join
-      const messagesWithNames = (data || []).map((message) => {
+      const messagesWithNames = (data || [])
+        .filter((message) => !message.parent_message_id) // Filter out thread replies
+        .map((message) => {
         const { message_attachments, sender_profile, ...rest } = message;
         return {
           ...rest,
@@ -253,8 +258,26 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
       const { data: { user } } = await supabase.auth.getUser();
       const currentUserId = user?.id;
 
-      // Add optimistic message with isUploading flag
-      const tempId = `temp-${Date.now()}`;
+      const parentMessageId = replyToMessage?.id || null;
+      const isReply = !!parentMessageId;
+      const tempId = isReply ? null : `temp-${Date.now()}`;
+      const createdAtIso = new Date().toISOString();
+
+      // For replies, only update parent metadata (don't add to main feed)
+      if (isReply) {
+        setMessages(prev => prev.map(msg => {
+          if (msg.id === parentMessageId) {
+            return {
+              ...msg,
+              thread_reply_count: (msg.thread_reply_count ?? 0) + 1,
+              last_thread_reply_at: createdAtIso,
+              thread_last_reply_author_id: currentUserId,
+            };
+          }
+          return msg;
+        }));
+      } else {
+        // For top-level messages, add optimistic message to feed
       const optimisticMessage = {
         id: tempId,
         content: content.trim(),
@@ -262,20 +285,26 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
         sender_name: 'You',
         isCurrentUser: true,
         message_type: messageType,
-        reply_to_message_id: replyToMessage?.id || null,
-        created_at: new Date().toISOString(),
+          reply_to_message_id: null,
+          parent_message_id: null,
+          created_at: createdAtIso,
         attachments: attachments.map(att => ({ uri: att.uri, isUploading: true })),
+          message_attachments: attachments.map(att => ({ uri: att.uri, isUploading: true })),
+          reactions: [],
+          thread_reply_count: 0,
         isUploading: attachments.length > 0
       };
       
       setMessages(prev => [...prev, optimisticMessage]);
+      }
 
-      const { data, error } = await sendMessage(
+      const { data, parent, error } = await sendMessage(
         channelId, 
         {
           content: content.trim(),
           message_type: messageType,
-          reply_to_message_id: replyToMessage?.id || null
+          reply_to_message_id: parentMessageId,
+          parent_message_id: parentMessageId,
         },
         attachments  // Pass attachments separately
       );
@@ -284,41 +313,101 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
 
       if (error) {
         console.error('❌ sendMessage error:', error);
-        // Remove optimistic message on error
+        // For replies, revert parent metadata on error
+        if (isReply) {
+          setMessages(prev => prev.map(msg => {
+            if (msg.id === parentMessageId) {
+              const currentCount = msg.thread_reply_count ?? 0;
+              return {
+                ...msg,
+                thread_reply_count: currentCount > 0 ? currentCount - 1 : 0,
+              };
+            }
+            return msg;
+          }));
+        } else if (tempId) {
+          // For top-level messages, remove optimistic message on error
         setMessages(prev => prev.filter(m => m.id !== tempId));
+        }
         throw error;
       }
 
       if (!data) {
         console.error('❌ sendMessage returned no data');
+        // Same error handling as above
+        if (isReply) {
+          setMessages(prev => prev.map(msg => {
+            if (msg.id === parentMessageId) {
+              const currentCount = msg.thread_reply_count ?? 0;
+              return {
+                ...msg,
+                thread_reply_count: currentCount > 0 ? currentCount - 1 : 0,
+              };
+            }
+            return msg;
+          }));
+        } else if (tempId) {
         setMessages(prev => prev.filter(m => m.id !== tempId));
+        }
         return;
       }
 
-      // Replace optimistic message with real message
-      // Preserve attachments from optimistic message
+      // For replies, just update parent metadata (reply doesn't appear in main feed)
+      if (isReply) {
+        if (parent) {
       setMessages(prev => {
-        const updated = prev.map(m => 
-          m.id === tempId 
-            ? {
+            const updated = prev.map(m => {
+              if (m.id === parent.id) {
+                const parentAttachments = parent.message_attachments || parent.attachments || m.attachments || [];
+                return {
+                  ...m,
+                  ...parent,
+                  attachments: parent.attachments || parentAttachments,
+                  message_attachments: parentAttachments,
+                  reactions: parent.reactions || m.reactions || [],
+                  thread_reply_count: parent.thread_reply_count ?? 0,
+                };
+              }
+              return m;
+            });
+
+            dataCache.setMessages(channelId, updated).catch(err => {
+              console.warn('Failed to persist messages:', err);
+            });
+
+            return updated;
+          });
+        }
+      } else {
+        // For top-level messages, replace optimistic message with real message
+        setMessages(prev => {
+          const updated = prev.map(m => {
+            if (m.id === tempId) {
+              const normalizedAttachments = data?.attachments || data?.message_attachments || m.attachments || [];
+              return {
                 ...data,
-                content: content.trim(), // Preserve content
+                content: content.trim(),
                 sender_id: currentUserId,
                 sender_name: 'You',
                 isCurrentUser: true,
-                reply_to_message_id: replyToMessage?.id || null,
-                attachments: m.attachments || [] // Preserve attachments
-              }
-            : m
-        );
-        
-        // ✅ Persist to AsyncStorage for WhatsApp-style persistence
+                reply_to_message_id: null,
+                parent_message_id: null,
+                attachments: normalizedAttachments,
+                message_attachments: normalizedAttachments,
+                reactions: data?.reactions || [],
+                thread_reply_count: data?.thread_reply_count ?? 0,
+              };
+            }
+            return m;
+          });
+
         dataCache.setMessages(channelId, updated).catch(err => {
           console.warn('Failed to persist messages:', err);
         });
         
         return updated;
       });
+      }
       
       // Mark the sent message as read (we just saw it)
       if (data?.id) {
@@ -384,6 +473,11 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
       return;
     }
 
+    // Skip thread replies - they don't appear in main channel view
+    // But we still need to update parent message metadata
+    const isReply = !!(newMessage.parent_message_id ?? newMessage.reply_to_message_id);
+    const parentId = newMessage.parent_message_id ?? newMessage.reply_to_message_id;
+
     // Fetch sender profile if not included in realtime payload
     let senderName = 'Loading...';
     let senderAvatar = null;
@@ -428,14 +522,46 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
       console.warn('Could not fetch attachments:', err);
     }
 
+    // If this is a reply, only update parent metadata, don't add to main feed
+    if (isReply && parentId) {
+      setMessages(prev => {
+        if (prev.some(msg => msg.id === newMessage.id)) {
+          return prev;
+        }
+
+        return prev.map(msg => {
+          if (msg.id === parentId) {
+            return {
+              ...msg,
+              thread_reply_count: (msg.thread_reply_count ?? 0) + 1,
+              last_thread_reply_at: newMessage.created_at || new Date().toISOString(),
+              thread_last_reply_author_id: newMessage.sender_id,
+            };
+          }
+          return msg;
+        });
+      });
+      return; // Don't add reply to main channel view
+    }
+
+    // For top-level messages, fetch sender info and add to feed
     const messageWithSender = {
       ...newMessage,
       sender_name: senderName,
       sender_avatar: senderAvatar,
-      attachments: attachments
+      attachments: attachments,
+      message_attachments: attachments,
+      reactions: newMessage.reactions || [],
+      thread_reply_count: newMessage.thread_reply_count ?? 0,
     };
 
-    setMessages(prev => [...prev, messageWithSender]);
+    setMessages(prev => {
+      if (prev.some(msg => msg.id === newMessage.id)) {
+        return prev;
+      }
+
+      return [...prev, messageWithSender];
+    });
 
     // If we're focused on this thread, mark it as read immediately
     if (isScreenFocused && newMessage?.id) {
@@ -454,19 +580,41 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
   };
 
   const handleMessageUpdate = (updatedMessage) => {
+    const normalizedUpdate = {
+      ...updatedMessage,
+      message_attachments: updatedMessage.message_attachments || updatedMessage.attachments || [],
+      reactions: updatedMessage.reactions || [],
+      thread_reply_count: updatedMessage.thread_reply_count ?? 0,
+    };
+
     setMessages(prev => 
       prev.map(msg => 
         msg.id === updatedMessage.id 
-          ? { ...msg, ...updatedMessage }
+          ? { ...msg, ...normalizedUpdate }
           : msg
       )
     );
   };
 
   const handleMessageDelete = (deletedMessage) => {
-    setMessages(prev => 
-      prev.filter(msg => msg.id !== deletedMessage.id)
-    );
+    const parentId = deletedMessage.parent_message_id ?? deletedMessage.reply_to_message_id;
+
+    setMessages(prev => {
+      const filtered = prev.filter(msg => msg.id !== deletedMessage.id);
+
+      if (!parentId) return filtered;
+
+      return filtered.map(msg => {
+        if (msg.id === parentId) {
+          const currentCount = msg.thread_reply_count ?? 0;
+          return {
+            ...msg,
+            thread_reply_count: currentCount > 0 ? currentCount - 1 : 0,
+          };
+        }
+        return msg;
+      });
+    });
   };
 
   const handleMessageTombstone = (tombstone) => {
@@ -641,8 +789,9 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
       };
     });
 
-    const parentMessage = item.reply_to_message_id ? 
-      messages.find(msg => msg.id === item.reply_to_message_id) : null;
+    const parentId = item.parent_message_id ?? item.reply_to_message_id;
+    const parentMessage = parentId ? 
+      messages.find(msg => msg.id === parentId) : null;
 
     return (
       <PanGestureHandler

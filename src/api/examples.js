@@ -68,7 +68,7 @@ export async function exampleGetMessages() {
 export async function exampleSendMessage() {
   const channelId = 'your-channel-id';
   
-  const { data: message, error } = await sendMessage(channelId, {
+  const { data: message, parent, error } = await sendMessage(channelId, {
     content: 'Hello team! Practice at 3 PM today.',
     message_type: 'text'
   });
@@ -78,7 +78,7 @@ export async function exampleSendMessage() {
     return;
   }
   
-  console.log('Message sent:', message);
+  console.log('Message sent:', message, 'Parent update:', parent);
 }
 
 /**

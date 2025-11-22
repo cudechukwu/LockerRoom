@@ -1063,7 +1063,7 @@ export default function App() {
             }}
           />
           <Stack.Screen 
-            name="Calendar" 
+            name="Schedule" 
             component={CalendarScreen}
             options={{
               presentation: 'card',

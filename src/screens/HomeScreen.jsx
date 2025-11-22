@@ -19,13 +19,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { COLORS } from '../constants/colors';
-import { TYPOGRAPHY } from '../constants/typography';
+import { TYPOGRAPHY, FONT_WEIGHTS } from '../constants/typography';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import Svg, { Circle } from 'react-native-svg';
 import { useHomeData } from '../hooks/useHomeData';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
+import { getEventsInRange, getEventColor } from '../api/events';
+import { EVENT_TYPES } from '../constants/eventTypes';
+import { getTodayAnchor, addDays } from '../utils/dateUtils';
 
 const { width } = Dimensions.get('window');
 
@@ -93,6 +96,85 @@ const HomeScreen = ({ navigation }) => {
   const nextEvent = data?.nextEvent;
   const userName = data?.userName || 'Player';
   const userAvatar = data?.userAvatar;
+  
+  // Fetch events for next 24 hours to check for games
+  const now = new Date();
+  const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  
+  const { data: next24HoursEvents } = useQuery({
+    queryKey: ['next24HoursEvents', teamId],
+    queryFn: async () => {
+      if (!teamId) return [];
+      const result = await getEventsInRange(teamId, now, next24Hours);
+      return result.data || [];
+    },
+    enabled: !!teamId,
+    staleTime: 2 * 60 * 1000, // 2 minutes
+  });
+  
+  // Find the next game in the next 24 hours
+  const nextGame = React.useMemo(() => {
+    if (!next24HoursEvents) return null;
+    const games = next24HoursEvents
+      .filter(event => event.event_type === EVENT_TYPES.GAME || event.event_type === 'game')
+      .map(event => ({
+        id: event.id,
+        title: event.title,
+        startTime: new Date(event.start_time),
+        location: event.location,
+        eventType: event.event_type,
+        color: event.color || getEventColor(event.event_type, { 
+          primary: COLORS.BRAND_ACCENT, 
+          secondary: COLORS.PRIMARY_BLACK 
+        })
+      }))
+      .sort((a, b) => a.startTime - b.startTime);
+    
+    return games.length > 0 ? games[0] : null;
+  }, [next24HoursEvents]);
+  
+  // Countdown timer state
+  const [timeUntilGame, setTimeUntilGame] = React.useState(null);
+  
+  // Update countdown every second
+  React.useEffect(() => {
+    if (!nextGame) {
+      setTimeUntilGame(null);
+      return;
+    }
+    
+    const updateCountdown = () => {
+      const now = new Date();
+      const diff = nextGame.startTime.getTime() - now.getTime();
+      
+      if (diff <= 0) {
+        setTimeUntilGame(null);
+        return;
+      }
+      
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+      
+      setTimeUntilGame({ hours, minutes, seconds });
+    };
+    
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
+    
+    return () => clearInterval(interval);
+  }, [nextGame]);
+  
+  // Format countdown display as H:MM:SS
+  const formatCountdown = () => {
+    if (!timeUntilGame) return '';
+    const { hours, minutes, seconds } = timeUntilGame;
+    // Format as H:MM:SS (e.g., 3:33:12)
+    const formattedHours = hours.toString();
+    const formattedMinutes = minutes.toString().padStart(2, '0');
+    const formattedSeconds = seconds.toString().padStart(2, '0');
+    return `${formattedHours}:${formattedMinutes}:${formattedSeconds}`;
+  };
   
   // Local state for UI interactions
   const [isGameDay, setIsGameDay] = useState(false); // Mock game day state
@@ -268,7 +350,7 @@ const HomeScreen = ({ navigation }) => {
             style={styles.nextUpCardNew}
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              navigation.navigate('Calendar');
+              navigation.navigate('Schedule');
             }}
             activeOpacity={0.9}
           >
@@ -294,7 +376,7 @@ const HomeScreen = ({ navigation }) => {
         ) : (
           <TouchableOpacity 
             style={styles.nextUpCardNew}
-            onPress={() => navigation.navigate('Calendar')}
+            onPress={() => navigation.navigate('Schedule')}
             activeOpacity={0.7}
           >
             <View style={styles.eventInfoNew}>
@@ -305,8 +387,8 @@ const HomeScreen = ({ navigation }) => {
           </TouchableOpacity>
         )}
         
-        {/* Game Mode Tag */}
-        {nextEvent && nextEvent.eventType === 'game' && (
+        {/* Game Mode Tag - Show if game in next 24 hours */}
+        {nextGame && (
           <TouchableOpacity 
             style={styles.gameModeTag}
             onPress={() => {
@@ -315,8 +397,11 @@ const HomeScreen = ({ navigation }) => {
             }}
             activeOpacity={0.8}
           >
-            <Ionicons name="flash" size={14} color="#FF6666" />
+            <Ionicons name="flash" size={14} color="#FF3333" />
             <Text style={styles.gameModeText}>Game Mode</Text>
+            {timeUntilGame && (
+              <Text style={styles.gameModeCountdown}>{formatCountdown()}</Text>
+            )}
           </TouchableOpacity>
         )}
       </View>
@@ -386,7 +471,7 @@ const HomeScreen = ({ navigation }) => {
             <TouchableOpacity 
               key={dayData.day} 
               style={styles.calendarDay}
-              onPress={() => navigation.navigate('Calendar')}
+              onPress={() => navigation.navigate('Schedule')}
               activeOpacity={0.7}
             >
               <Text style={styles.calendarDayText}>{dayData.day}</Text>
@@ -758,16 +843,34 @@ const styles = StyleSheet.create({
   gameModeTag: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(204, 204, 204, 0.3)',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)', // Pure black with translucency
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 20,
     marginTop: 12,
     alignSelf: 'flex-start',
     gap: 6,
+    // Subtle border for definition
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    // Shadow for depth
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 3,
   },
   gameModeText: {
     ...TYPOGRAPHY.gameMode,
+    color: '#FF3333', // Closer to pure red but not quite (#FF0000)
+    fontWeight: FONT_WEIGHTS.SEMIBOLD,
+  },
+  gameModeCountdown: {
+    ...TYPOGRAPHY.gameMode,
+    color: '#FF3333',
+    fontWeight: FONT_WEIGHTS.REGULAR,
+    marginLeft: 8,
+    opacity: 0.8,
   },
   nextUpCard: {
     backgroundColor: COLORS.BACKGROUND_CARD_SECONDARY,

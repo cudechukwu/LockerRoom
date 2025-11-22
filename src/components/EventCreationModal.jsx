@@ -11,8 +11,11 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import { COLORS } from '../constants/colors';
-import { getFontWeight, getFontSize } from '../constants/fonts';
+import { TYPOGRAPHY, FONT_SIZES, FONT_WEIGHTS, scaleFont } from '../constants/typography';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getTodayAnchor } from '../utils/dateUtils';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -24,10 +27,17 @@ const EventCreationModal = ({
   prefilledData = {},
   teamColors = { primary: '#FF4444', secondary: '#000000' }
 }) => {
+  const insets = useSafeAreaInsets();
   const [postTo, setPostTo] = useState('Team');
   const [eventType, setEventType] = useState('practice');
   const [title, setTitle] = useState('');
-  const [date, setDate] = useState(new Date().toLocaleDateString());
+  const [date, setDate] = useState(() => {
+    const today = getTodayAnchor();
+    const month = (today.getMonth() + 1).toString().padStart(2, '0');
+    const day = today.getDate().toString().padStart(2, '0');
+    const year = today.getFullYear();
+    return `${month}/${day}/${year}`;
+  });
   const [startTime, setStartTime] = useState('3:00 PM');
   const [endTime, setEndTime] = useState('5:00 PM');
   const [location, setLocation] = useState('');
@@ -66,6 +76,7 @@ const EventCreationModal = ({
     '10:00 PM', '10:30 PM', '11:00 PM', '11:30 PM'
   ];
 
+
   // Auto-fill title when event type changes
   useEffect(() => {
     const selectedEventType = eventTypes.find(type => type.id === eventType);
@@ -95,7 +106,16 @@ const EventCreationModal = ({
     }
   }, [prefilledData]);
 
-  const handleCreateEvent = () => {
+  const handleCreateEvent = async () => {
+    console.log('🔵 EventCreationModal: handleCreateEvent called');
+    console.log('🔵 Form state:', { postTo, eventType, title, date, startTime, endTime, location, recurring, notes });
+    
+    // Basic validation
+    if (!title || !title.trim()) {
+      console.warn('⚠️ Title is required');
+      return;
+    }
+    
     const eventData = {
       postTo,
       eventType,
@@ -109,7 +129,23 @@ const EventCreationModal = ({
       color: eventTypes.find(type => type.id === eventType)?.color || teamColors.primary
     };
     
-    onCreateEvent(eventData);
+    console.log('🔵 Calling onCreateEvent with:', eventData);
+    console.log('🔵 onCreateEvent function type:', typeof onCreateEvent);
+    
+    if (typeof onCreateEvent === 'function') {
+      try {
+        // Call the async function and wait for it
+        await onCreateEvent(eventData);
+        console.log('🔵 onCreateEvent completed successfully');
+      } catch (error) {
+        console.error('❌ Error in onCreateEvent:', error);
+      }
+    } else {
+      console.error('❌ onCreateEvent is not a function!', onCreateEvent);
+      return;
+    }
+    
+    // Close modal after async operation completes
     onClose();
     
     // Reset form
@@ -199,7 +235,7 @@ const EventCreationModal = ({
         <Ionicons 
           name={isOpen ? "chevron-up" : "chevron-down"} 
           size={20} 
-          color="#6B7280" 
+          color={COLORS.TEXT_TERTIARY} 
         />
       </TouchableOpacity>
       
@@ -232,17 +268,27 @@ const EventCreationModal = ({
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle="pageSheet"
+      presentationStyle="overFullScreen"
+      transparent={true}
       onRequestClose={onClose}
     >
       <View style={styles.modalContainer}>
-        {/* Header */}
-        <View style={styles.header}>
+        <BlurView intensity={80} tint="dark" style={styles.modalBlur} />
+        <View style={styles.modalTint} />
+        <View style={[styles.modalContent, { paddingTop: insets.top }]}>
+          {/* Header */}
+          <View style={styles.header}>
           <TouchableOpacity onPress={onClose} style={styles.cancelButton}>
             <Text style={styles.cancelButtonText}>Cancel</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Create Event</Text>
-          <TouchableOpacity onPress={handleCreateEvent} style={styles.createButton}>
+          <TouchableOpacity 
+            onPress={() => {
+              console.log('🔴 Create button pressed!');
+              handleCreateEvent();
+            }} 
+            style={styles.createButton}
+          >
             <Text style={styles.createButtonText}>Create</Text>
           </TouchableOpacity>
         </View>
@@ -263,17 +309,21 @@ const EventCreationModal = ({
               value={title}
               onChangeText={setTitle}
               placeholder="Event title"
-              placeholderTextColor="#9CA3AF"
+              placeholderTextColor={COLORS.TEXT_TERTIARY}
             />
           </View>
 
           {/* Date */}
           <View style={styles.fieldContainer}>
             <Text style={styles.fieldLabel}>Date</Text>
-            <TouchableOpacity style={styles.textInput}>
-              <Text style={styles.inputText}>{date}</Text>
-              <Ionicons name="calendar-outline" size={20} color="#6B7280" />
-            </TouchableOpacity>
+            <TextInput
+              style={styles.textInput}
+              value={date}
+              onChangeText={setDate}
+              placeholder="MM/DD/YYYY"
+              placeholderTextColor={COLORS.TEXT_TERTIARY}
+              keyboardType="numeric"
+            />
           </View>
 
           {/* Time */}
@@ -292,7 +342,7 @@ const EventCreationModal = ({
                   <Ionicons 
                     name={showStartTimePicker ? "chevron-up" : "chevron-down"} 
                     size={16} 
-                    color="#6B7280" 
+                    color={COLORS.TEXT_TERTIARY} 
                   />
                 </TouchableOpacity>
                 {showStartTimePicker && (
@@ -329,7 +379,7 @@ const EventCreationModal = ({
                   <Ionicons 
                     name={showEndTimePicker ? "chevron-up" : "chevron-down"} 
                     size={16} 
-                    color="#6B7280" 
+                    color={COLORS.TEXT_TERTIARY} 
                   />
                 </TouchableOpacity>
                 {showEndTimePicker && (
@@ -384,12 +434,13 @@ const EventCreationModal = ({
               value={notes}
               onChangeText={setNotes}
               placeholder="Add notes or instructions..."
-              placeholderTextColor="#9CA3AF"
+              placeholderTextColor={COLORS.TEXT_TERTIARY}
               multiline
               numberOfLines={3}
             />
           </View>
         </ScrollView>
+        </View>
       </View>
     </Modal>
   );
@@ -398,42 +449,65 @@ const EventCreationModal = ({
 const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+  },
+  modalBlur: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  modalTint: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.12)', // Very light tint - allows blur to show through
+  },
+  modalContent: {
+    flex: 1,
+    backgroundColor: 'transparent',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
+    backgroundColor: 'transparent',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
   },
   cancelButton: {
     paddingVertical: 8,
     paddingHorizontal: 4,
   },
   cancelButtonText: {
-    fontSize: getFontSize('BASE'),
-    color: '#6B7280',
-    fontWeight: getFontWeight('REGULAR'),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    color: COLORS.TEXT_TERTIARY,
+    fontWeight: FONT_WEIGHTS.REGULAR,
   },
   headerTitle: {
-    fontSize: getFontSize('LG'),
-    fontWeight: getFontWeight('BOLD'),
-    color: COLORS.PRIMARY_BLACK,
+    ...TYPOGRAPHY.title,
+    fontSize: scaleFont(FONT_SIZES.BASE),
+    fontWeight: FONT_WEIGHTS.BOLD,
+    color: COLORS.TEXT_PRIMARY,
   },
   createButton: {
-    backgroundColor: COLORS.PRIMARY_BLACK,
-    paddingVertical: 8,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    paddingVertical: 7,
     paddingHorizontal: 16,
-    borderRadius: 20,
+    borderRadius: 14,
+    borderWidth: 0,
   },
   createButtonText: {
-    fontSize: getFontSize('BASE'),
-    color: '#FFFFFF',
-    fontWeight: getFontWeight('MEDIUM'),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: FONT_WEIGHTS.REGULAR,
   },
   content: {
     flex: 1,
@@ -441,24 +515,25 @@ const styles = StyleSheet.create({
     paddingTop: 24,
   },
   fieldContainer: {
-    marginBottom: 24,
+    marginBottom: 20,
   },
   fieldLabel: {
-    fontSize: getFontSize('BASE'),
-    fontWeight: getFontWeight('MEDIUM'),
-    color: COLORS.PRIMARY_BLACK,
-    marginBottom: 8,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    fontWeight: FONT_WEIGHTS.SEMIBOLD,
+    color: COLORS.TEXT_SECONDARY,
+    marginBottom: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   dropdown: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    paddingVertical: 14,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 14,
+    borderWidth: 0,
   },
   dropdownContent: {
     flexDirection: 'row',
@@ -472,60 +547,65 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
   },
   colorIndicatorText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: getFontWeight('BOLD'),
+    color: COLORS.WHITE,
+    fontSize: scaleFont(12),
+    fontWeight: FONT_WEIGHTS.BOLD,
   },
   dropdownText: {
-    fontSize: getFontSize('BASE'),
-    color: COLORS.PRIMARY_BLACK,
-    fontWeight: getFontWeight('REGULAR'),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: FONT_WEIGHTS.REGULAR,
   },
   dropdownOptions: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'rgba(12, 12, 14, 0.98)',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    marginTop: 4,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    marginTop: 6,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 5,
     zIndex: 1000,
+    overflow: 'hidden',
   },
   dropdownOption: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderBottomWidth: 0.5,
-    borderBottomColor: '#E5E7EB',
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
   },
   dropdownOptionText: {
-    fontSize: getFontSize('BASE'),
-    color: COLORS.PRIMARY_BLACK,
-    fontWeight: getFontWeight('REGULAR'),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: FONT_WEIGHTS.REGULAR,
   },
   textInput: {
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    fontSize: getFontSize('BASE'),
-    color: COLORS.PRIMARY_BLACK,
+    paddingVertical: 14,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 14,
+    borderWidth: 0,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    color: COLORS.TEXT_PRIMARY,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   inputText: {
-    fontSize: getFontSize('BASE'),
-    color: COLORS.PRIMARY_BLACK,
-    fontWeight: getFontWeight('REGULAR'),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: FONT_WEIGHTS.REGULAR,
   },
   timeContainer: {
     flexDirection: 'row',
@@ -539,75 +619,82 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   timeSeparator: {
-    fontSize: getFontSize('BASE'),
-    color: '#6B7280',
+    ...TYPOGRAPHY.caption,
+    fontSize: scaleFont(FONT_SIZES.XS),
+    color: COLORS.TEXT_TERTIARY,
     marginHorizontal: 12,
-    fontWeight: getFontWeight('REGULAR'),
-    paddingTop: 12,
+    fontWeight: FONT_WEIGHTS.REGULAR,
+    paddingTop: 14,
   },
   timePickerOptions: {
     position: 'absolute',
     top: '100%',
     left: 0,
     right: 0,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'rgba(12, 12, 14, 0.98)',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    marginTop: 4,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    marginTop: 6,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 5,
     zIndex: 1000,
     maxHeight: 200,
+    overflow: 'hidden',
   },
   timePickerScroll: {
     maxHeight: 200,
   },
   timeOption: {
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderBottomWidth: 0.5,
-    borderBottomColor: '#E5E7EB',
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
   },
   timeOptionText: {
-    fontSize: getFontSize('BASE'),
-    color: COLORS.PRIMARY_BLACK,
-    fontWeight: getFontWeight('REGULAR'),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    color: COLORS.TEXT_PRIMARY,
+    fontWeight: FONT_WEIGHTS.REGULAR,
     textAlign: 'center',
   },
   timeDurationInfo: {
-    marginTop: 8,
+    marginTop: 10,
     paddingHorizontal: 4,
   },
   durationText: {
-    fontSize: getFontSize('SM'),
-    color: '#6B7280',
-    fontWeight: getFontWeight('MEDIUM'),
-    marginBottom: 4,
+    ...TYPOGRAPHY.caption,
+    fontSize: scaleFont(FONT_SIZES.XS),
+    color: COLORS.TEXT_TERTIARY,
+    fontWeight: FONT_WEIGHTS.MEDIUM,
+    marginBottom: 6,
   },
   warningContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#F59E0B',
+    borderColor: 'rgba(245, 158, 11, 0.3)',
   },
   warningText: {
-    fontSize: getFontSize('SM'),
-    color: '#92400E',
-    fontWeight: getFontWeight('MEDIUM'),
+    ...TYPOGRAPHY.caption,
+    fontSize: scaleFont(FONT_SIZES.XS),
+    color: '#F59E0B',
+    fontWeight: FONT_WEIGHTS.MEDIUM,
     marginLeft: 6,
   },
   notesInput: {
-    height: 80,
+    height: 100,
     textAlignVertical: 'top',
-    paddingTop: 12,
+    paddingTop: 14,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    color: COLORS.TEXT_PRIMARY,
   },
 });
 

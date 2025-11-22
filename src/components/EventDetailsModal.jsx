@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
 import { getFontWeight, getFontSize } from '../constants/fonts';
+import { getUserProfile } from '../api/profiles';
+import { getEventTypeInfo } from '../constants/eventTypes';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -24,36 +26,70 @@ const EventDetailsModal = ({
   onDelete,
   event = null
 }) => {
+  const [creatorName, setCreatorName] = useState(null);
+  const [isLoadingCreator, setIsLoadingCreator] = useState(false);
+
+  // Fetch creator name when event changes
+  useEffect(() => {
+    const fetchCreatorName = async () => {
+      if (!event?.createdBy) {
+        setCreatorName(null);
+        return;
+      }
+
+      // If createdBy is already a name (string that's not a UUID), use it
+      if (typeof event.createdBy === 'string' && !event.createdBy.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+        setCreatorName(event.createdBy);
+        return;
+      }
+
+      setIsLoadingCreator(true);
+      try {
+        const { data: profile } = await getUserProfile(event.createdBy);
+        if (profile) {
+          setCreatorName(profile.display_name || profile.email || 'Unknown User');
+        } else {
+          setCreatorName('Unknown User');
+        }
+      } catch (error) {
+        console.error('Error fetching creator name:', error);
+        setCreatorName('Unknown User');
+      } finally {
+        setIsLoadingCreator(false);
+      }
+    };
+
+    if (visible && event) {
+      fetchCreatorName();
+    }
+  }, [visible, event?.createdBy]);
+
   if (!event) return null;
 
   const formatEventDate = (date) => {
     if (!date) return '';
+    try {
     const eventDate = new Date(date);
+      if (isNaN(eventDate.getTime())) return '';
     return eventDate.toLocaleDateString('en-US', { 
       weekday: 'long', 
       month: 'long', 
       day: 'numeric', 
       year: 'numeric' 
     });
+    } catch (error) {
+      return '';
+    }
   };
 
   const formatEventTime = (startTime, endTime) => {
     if (!startTime) return '';
-    return endTime ? `${startTime} - ${endTime}` : startTime;
+    const start = String(startTime).trim();
+    if (!start) return '';
+    const end = endTime ? String(endTime).trim() : '';
+    return end ? `${start} - ${end}` : start;
   };
 
-  const getEventTypeInfo = () => {
-    const eventTypes = {
-      practice: { title: 'Practice', icon: 'P' },
-      game: { title: 'Game', icon: 'G' },
-      meeting: { title: 'Meeting', icon: 'M' },
-      film: { title: 'Film', icon: 'F' },
-      training: { title: 'Training', icon: 'T' },
-      other: { title: 'Other', icon: 'O' },
-    };
-    
-    return eventTypes[event.eventType] || eventTypes.other;
-  };
 
   const handleDelete = () => {
     Alert.alert(
@@ -78,7 +114,7 @@ const EventDetailsModal = ({
     onClose();
   };
 
-  const eventTypeInfo = getEventTypeInfo();
+  const eventTypeInfo = getEventTypeInfo(event.eventType || event.type, {});
 
   return (
     <Modal
@@ -109,9 +145,9 @@ const EventDetailsModal = ({
           {/* Event Type Badge */}
           <View style={styles.eventTypeSection}>
             <View style={[styles.eventTypeBadge, { backgroundColor: event.color || '#6B7280' }]}>
-              <Text style={styles.eventTypeIcon}>{eventTypeInfo.icon}</Text>
+              <Text style={styles.eventTypeIcon}>{eventTypeInfo?.icon || 'O'}</Text>
             </View>
-            <Text style={styles.eventTypeText}>{eventTypeInfo.title}</Text>
+            <Text style={styles.eventTypeText}>{eventTypeInfo?.title || 'Event'}</Text>
             {event.postTo && (
               <View style={styles.postToTag}>
                 <Text style={styles.postToText}>
@@ -132,20 +168,20 @@ const EventDetailsModal = ({
           <View style={styles.section}>
             <View style={styles.infoRow}>
               <Ionicons name="calendar-outline" size={20} color="#6B7280" />
-              <Text style={styles.infoText}>{formatEventDate(event.date)}</Text>
+              <Text style={styles.infoText}>{formatEventDate(event.date) || 'No date set'}</Text>
             </View>
             <View style={styles.infoRow}>
               <Ionicons name="time-outline" size={20} color="#6B7280" />
-              <Text style={styles.infoText}>{formatEventTime(event.startTime, event.endTime)}</Text>
+              <Text style={styles.infoText}>{formatEventTime(event.startTime, event.endTime) || 'No time set'}</Text>
             </View>
           </View>
 
           {/* Location */}
-          {event.location && (
+          {event.location && String(event.location).trim() && (
             <View style={styles.section}>
               <View style={styles.infoRow}>
                 <Ionicons name="location-outline" size={20} color="#6B7280" />
-                <Text style={styles.infoText}>{event.location}</Text>
+                <Text style={styles.infoText}>{String(event.location)}</Text>
               </View>
             </View>
           )}
@@ -177,11 +213,11 @@ const EventDetailsModal = ({
           )}
 
           {/* Notes */}
-          {event.notes && (
+          {event.notes && String(event.notes).trim() && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Notes</Text>
               <View style={styles.notesCard}>
-                <Text style={styles.notesText}>{event.notes}</Text>
+                <Text style={styles.notesText}>{String(event.notes)}</Text>
               </View>
             </View>
           )}
@@ -191,7 +227,9 @@ const EventDetailsModal = ({
             <View style={styles.section}>
               <View style={styles.infoRow}>
                 <Ionicons name="person-outline" size={20} color="#6B7280" />
-                <Text style={styles.infoText}>Created by {event.createdBy}</Text>
+                <Text style={styles.infoText}>
+                  Created by {isLoadingCreator ? 'Loading...' : (creatorName || 'Unknown User')}
+                </Text>
               </View>
             </View>
           )}

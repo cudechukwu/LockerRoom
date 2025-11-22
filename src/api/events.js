@@ -334,6 +334,17 @@ export async function searchEvents(teamId, searchTerm) {
  * @param {string} userId - User ID
  * @returns {Object} Database-ready event data
  */
+/**
+ * Map frontend event type to database event type
+ * The database uses 'review' instead of 'film'
+ */
+function mapEventTypeToDatabase(eventType) {
+  if (eventType === 'film') {
+    return 'review';
+  }
+  return eventType;
+}
+
 export function formatEventData(formData, teamId, userId) {
   // Parse date in MM/DD/YYYY format
   const dateParts = formData.date.split('/');
@@ -401,7 +412,7 @@ export function formatEventData(formData, teamId, userId) {
     team_id: teamId,
     title: formData.title,
     description: formData.notes || null,
-    event_type: formData.eventType || 'other',
+    event_type: mapEventTypeToDatabase(formData.eventType || 'other'),
     start_time: startDateTime.toISOString(),
     end_time: endDateTime.toISOString(),
     location: formData.location || null,
@@ -443,24 +454,6 @@ export async function getTeamColors(teamId) {
   }
 }
 
-/**
- * Get default event color based on event type
- * @param {string} eventType - Event type
- * @param {Object} teamColors - Team colors
- * @returns {string} Hex color code
- */
-export function getEventColor(eventType, teamColors = {}) {
-  const colorMap = {
-    practice: teamColors.primary || '#FF4444',
-    game: teamColors.secondary || '#000000',
-    meeting: '#10B981',
-    review: '#8B5CF6',
-    training: '#F59E0B',
-    conditioning: '#F59E0B',
-    personal: '#6B7280',
-    other: '#6B7280'
-  };
-
-  return colorMap[eventType] || '#FF4444';
-}
+// Re-export from constants for backward compatibility
+export { getEventColor } from '../constants/eventTypes';
 

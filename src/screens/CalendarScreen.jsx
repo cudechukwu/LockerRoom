@@ -1,246 +1,360 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   TouchableOpacity,
   ScrollView,
-  Dimensions,
-  Platform,
-  Animated,
   Alert,
   RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
 import { TYPOGRAPHY, FONT_SIZES, FONT_WEIGHTS, scaleFont } from '../constants/typography';
 import { useCalendarData } from '../hooks/useCalendarData';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { queryKeys } from '../hooks/queryKeys';
 import { createEvent, updateEvent, deleteEvent, formatEventData } from '../api/events';
 import { supabase } from '../lib/supabase';
+import { dataCache } from '../utils/dataCache';
+import { normalizeDate, isToday as isTodayDate, getDaysDifference, getTodayAnchor } from '../utils/dateUtils';
 import EventCreationModal from '../components/EventCreationModal';
 import EventDetailsModal from '../components/EventDetailsModal';
 import CalendarSkeletonLoader from '../components/CalendarSkeletonLoader';
-
-const { width, height } = Dimensions.get('window');
-const isTablet = width >= 768;
-
-const CALENDAR_VIEWS = {
-  MONTH: 'month',
-  WEEK: 'week',
-  DAY: 'day',
-};
-
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December'
-];
-
-const MONTHS_SHORT = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'
-];
-
-const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+import DateSelector from '../components/DateSelector';
+import EventsList from '../components/EventsList';
 
 const CalendarScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
-  const tabBarHeight = Platform.OS === 'ios' ? 88 : 60;
-  const adjustedTabBarHeight = tabBarHeight + Math.max(insets.bottom - 10, 0);
+  const adjustedTabBarHeight = useTabBarHeight();
+  const queryClient = useQueryClient();
 
-  const [currentView, setCurrentView] = useState(CALENDAR_VIEWS.MONTH);
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  // Initialize currentDate to today at midnight (normalized, using session anchor)
+  const [currentDate, setCurrentDate] = useState(() => getTodayAnchor());
   const [showEventModal, setShowEventModal] = useState(false);
   const [modalPrefilledData, setModalPrefilledData] = useState({});
   const [showEventDetailsModal, setShowEventDetailsModal] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState(null);
+  const [dateScrollIndex, setDateScrollIndex] = useState(0);
+  // Optimistic updates: track pending operations
+  const [optimisticEvents, setOptimisticEvents] = useState([]);
+  const [deletedEventIds, setDeletedEventIds] = useState(new Set());
 
-  // Use the new calendar data hook
+  // Always use DAY view for the new design
+  const CALENDAR_VIEW = 'day';
+
+  // Ensure currentDate is always normalized to midnight on mount
+  useEffect(() => {
+    const normalized = normalizeDate(currentDate);
+    // Only update if the date actually changed (avoid infinite loops)
+    if (normalized && normalized.getTime() !== currentDate.getTime()) {
+      setCurrentDate(normalized);
+    }
+  }, []); // Only run on mount
+
+  // Use the calendar data hook - always fetch day events
   const { 
     teamId, 
     teamColors, 
     events, 
-    upcomingEvents, 
     isLoading, 
     isFetching, 
     error, 
     refetch 
-  } = useCalendarData(currentView, currentDate);
+  } = useCalendarData(CALENDAR_VIEW, currentDate);
+
+
+  // Get events for the currently selected date (with optimistic updates)
+  const dayEvents = useMemo(() => {
+    // Normalize selected date to midnight for accurate comparison
+    const selectedDate = normalizeDate(currentDate);
+    if (!selectedDate) return [];
+    const selectedDateTime = selectedDate.getTime();
+    
+    // Combine real events with optimistic ones, filter out deleted
+    const allEvents = [...(events || []), ...optimisticEvents].filter(
+      event => !deletedEventIds.has(event.id)
+    );
+    
+    return allEvents
+      .filter(event => {
+        if (!event || !event.startTime) return false;
+        // Normalize event date to midnight for accurate comparison
+        const eventDate = normalizeDate(event.startTime);
+        if (!eventDate) return false;
+        // Use getTime() for more reliable comparison (avoids timezone issues)
+        return eventDate.getTime() === selectedDateTime;
+      })
+      .sort((a, b) => {
+        const timeA = new Date(a.startTime).getTime();
+        const timeB = new Date(b.startTime).getTime();
+        return timeA - timeB;
+      });
+  }, [events, optimisticEvents, deletedEventIds, currentDate]);
 
   // Manual refresh handler
   const handleManualRefresh = useCallback(() => {
     refetch();
   }, [refetch]);
 
-  // Memoized calendar computations to prevent unnecessary re-renders
-  const monthDays = useMemo(() => {
-    const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-    const lastDay = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
-    const startDate = new Date(firstDay);
-    startDate.setDate(startDate.getDate() - firstDay.getDay());
-    
-    const days = [];
-    const currentDay = new Date(startDate);
-    
-    // Generate 6 weeks (42 days) to fill the calendar grid
-    for (let i = 0; i < 42; i++) {
-      days.push(new Date(currentDay));
-      currentDay.setDate(currentDay.getDate() + 1);
+  // Navigate to a specific date
+  const navigateToDate = useCallback((date) => {
+    // Normalize date to midnight to ensure consistent date comparisons
+    const normalizedDate = normalizeDate(date);
+    if (normalizedDate) {
+      setCurrentDate(normalizedDate);
     }
+  }, []);
+
+  // Navigate to today - only called when button is explicitly pressed
+  const navigateToToday = useCallback(() => {
+    // Use session anchor for consistency
+    setCurrentDate(getTodayAnchor());
+  }, []);
     
-    return days;
+  // Check if current date is today - always uses fresh "today" for comparison
+  const isToday = useMemo(() => {
+    return isTodayDate(currentDate);
   }, [currentDate]);
 
-  const weekDays = useMemo(() => {
-    const startOfWeek = new Date(currentDate);
-    startOfWeek.setDate(currentDate.getDate() - currentDate.getDay());
-    
-    const days = [];
-    for (let i = 0; i < 7; i++) {
-      const day = new Date(startOfWeek);
-      day.setDate(startOfWeek.getDate() + i);
-      days.push(day);
-    }
-    
-    return days;
+  // Check if we're more than 10 days away from today (for showing back to today button)
+  const shouldShowBackToToday = useMemo(() => {
+    // Use session anchor for consistency
+    const diffDays = getDaysDifference(currentDate, getTodayAnchor());
+    if (diffDays === null) return false;
+    // Show button if more than 10 days away
+    return Math.abs(diffDays) > 10;
   }, [currentDate]);
 
-  const dayEvents = useMemo(() => {
-    const today = new Date(currentDate);
-    return events
-      .filter(event => {
-        if (!event || !event.startTime) return false;
-        const eventDate = new Date(event.startTime);
-        return eventDate.toDateString() === today.toDateString();
-      })
-      .map(event => {
-        const startHour = new Date(event.startTime).getHours();
-        const endHour = new Date(event.endTime).getHours();
-        const duration = Math.max(1, endHour - startHour);
-        
-        return {
-          ...event,
-          startTime: startHour,
-          duration: duration,
-        };
-      });
-  }, [events, currentDate]);
+  // Format time for display
+  const formatTime = useCallback((date) => {
+    if (!date) return '';
+    const d = new Date(date);
+    const hours = d.getHours();
+    const minutes = d.getMinutes();
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const displayHours = hours % 12 || 12;
+    const displayMinutes = minutes.toString().padStart(2, '0');
+    return `${displayHours}:${displayMinutes} ${ampm}`;
+  }, []);
 
-  const weekEvents = useMemo(() => {
-    return events
-      .filter(event => event && event.startTime && event.endTime)
-      .map(event => {
-        const eventDate = new Date(event.startTime);
-        const startHour = eventDate.getHours();
-        const endHour = new Date(event.endTime).getHours();
-        const duration = Math.max(1, endHour - startHour);
-        
-        return {
-          ...event,
-          startTime: startHour,
-          duration: duration,
-          dayOfWeek: eventDate.getDay(),
-        };
-      });
-  }, [events]);
-
-  const hours = useMemo(() => Array.from({ length: 24 }, (_, i) => i), []);
-
-  const navigateMonth = (direction) => {
-    const newDate = new Date(currentDate);
-    newDate.setMonth(newDate.getMonth() + direction);
-    setCurrentDate(newDate);
-  };
-
-  const navigateWeek = (direction) => {
-    const newDate = new Date(currentDate);
-    newDate.setDate(newDate.getDate() + (direction * 7));
-    setCurrentDate(newDate);
-  };
-
-  const navigateDay = (direction) => {
-    const newDate = new Date(currentDate);
-    newDate.setDate(newDate.getDate() + direction);
-    setCurrentDate(newDate);
-  };
-
-  const handleDatePress = (date) => {
-    setSelectedDate(date);
-    setModalPrefilledData({
-      date: date.toLocaleDateString()
+  // Helper function to invalidate all event-related caches
+  const invalidateEventCaches = useCallback(async (teamId) => {
+    if (!teamId) return;
+    
+    console.log('🔄 Invalidating React Query caches for teamId:', teamId);
+    
+    // 🔥 FIXED: Use correct query keys to match what's actually used in useCalendarData
+    // For DAY view, the query key is ['calendarEvents', teamId, 'day', 'fullYear']
+    // Use partial matching to invalidate all calendar event queries
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['calendarEvents', teamId] }), // Matches all calendar event queries
+      queryClient.invalidateQueries({ queryKey: queryKeys.upcomingEvents(teamId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.nextEvent(teamId) }),
+    ]);
+    
+    // Clear specific dataCache entries if they exist
+    // Note: dataCache uses Map internally, so we clear known keys
+    const todayKey = currentDate.toISOString().split('T')[0];
+    const knownEventKeys = [
+      `calendarEvents_${teamId}_day_fullYear`, // 🔥 FIXED: Use the actual cache key for DAY view
+      `upcomingEvents_${teamId}`,
+    ];
+    
+    knownEventKeys.forEach(key => {
+      dataCache.clear(key);
     });
-    setShowEventModal(true);
-  };
+    
+    console.log('✅ Cache invalidation complete');
+  }, [queryClient, currentDate]);
 
+  // Optimistic create event with immediate UI update
   const handleCreateEvent = useCallback(async (eventData) => {
-    try {
-      console.log('Creating event:', eventData);
+    console.log('🟢 CalendarScreen: handleCreateEvent called with:', eventData);
       
-      // Get current user
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         Alert.alert('Error', 'You must be logged in to create events.');
         return;
       }
       
-      // Format event data for database
-      const formattedData = formatEventData(eventData, teamId, user.id);
+    // Create optimistic event
+    const tempId = `temp-${Date.now()}`;
+    
+    // Parse date - handle MM/DD/YYYY format
+    const dateParts = eventData.date.split('/');
+    const month = parseInt(dateParts[0]) - 1; // JS months are 0-indexed
+    const day = parseInt(dateParts[1]);
+    const year = parseInt(dateParts[2]);
+    
+    // Parse start time - use startTime or time field
+    const startTimeStr = eventData.startTime || eventData.time;
+    if (!startTimeStr) {
+      console.error('❌ No start time provided');
+      Alert.alert('Error', 'Start time is required');
+      return;
+    }
+    
+    const startTimeParts = startTimeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if (!startTimeParts) {
+      console.error('❌ Invalid time format:', startTimeStr);
+      Alert.alert('Error', 'Invalid time format');
+      return;
+    }
+    
+    let startHour = parseInt(startTimeParts[1]);
+    const startMinute = parseInt(startTimeParts[2]);
+    const startPeriod = startTimeParts[3].toUpperCase();
+    
+    if (startPeriod === 'PM' && startHour !== 12) {
+      startHour += 12;
+    } else if (startPeriod === 'AM' && startHour === 12) {
+      startHour = 0;
+    }
+    
+    // 🔥 FIXED: Create dates in local timezone, then normalize date part to midnight
+    // This ensures the date part matches when filtering (which normalizes to midnight)
+    const startTime = new Date(year, month, day, startHour, startMinute);
+    // Normalize the date part to midnight (for consistent date comparison)
+    // But keep the time component for display
+    const normalizedStartTime = new Date(startTime);
+    normalizedStartTime.setHours(startHour, startMinute, 0, 0);
+    // The date part is already correct (year, month, day), we just set the time
+    
+    // Parse end time
+    const endTimeStr = eventData.endTime || eventData.startTime || eventData.time;
+    const endTimeParts = endTimeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    let endTime;
+    
+    if (endTimeParts) {
+      let endHour = parseInt(endTimeParts[1]);
+      const endMinute = parseInt(endTimeParts[2]);
+      const endPeriod = endTimeParts[3].toUpperCase();
       
-      // Create event in database
+      if (endPeriod === 'PM' && endHour !== 12) {
+        endHour += 12;
+      } else if (endPeriod === 'AM' && endHour === 12) {
+        endHour = 0;
+      }
+      
+      endTime = new Date(year, month, day, endHour, endMinute);
+      endTime.setHours(endHour, endMinute, 0, 0);
+    } else {
+      // Default to 1 hour after start
+      endTime = new Date(normalizedStartTime);
+      endTime.setHours(startHour + 1, startMinute, 0, 0);
+    }
+
+    const optimisticEvent = {
+      id: tempId,
+      title: eventData.title,
+      eventType: eventData.eventType,
+      startTime: normalizedStartTime.toISOString(), // 🔥 FIXED: Use properly formatted date
+      endTime: endTime.toISOString(),
+      location: eventData.location || '',
+      notes: eventData.notes || '',
+      color: eventData.color || teamColors.primary,
+      type: eventData.postTo === 'Personal' ? 'personal' : 'team',
+      isOptimistic: true,
+    };
+
+    // Optimistically add to UI
+    setOptimisticEvents(prev => [...prev, optimisticEvent]);
+    setShowEventModal(false);
+
+    try {
+      console.log('📝 Creating event with data:', eventData);
+      const formattedData = formatEventData(eventData, teamId, user.id);
+      console.log('📦 Formatted event data:', formattedData);
+      
       const { data, error } = await createEvent(formattedData);
       
       if (error) {
-        console.error('Error creating event:', error);
-        Alert.alert('Error', 'Failed to create event. Please try again.');
+        console.error('❌ Error from createEvent:', error);
+        // Remove optimistic event on error
+        setOptimisticEvents(prev => prev.filter(e => e.id !== tempId));
+        Alert.alert('Error', `Failed to create event: ${error.message || 'Unknown error'}`);
         return;
       }
       
-      console.log('Event created successfully:', data);
+      console.log('✅ Event created successfully:', data);
       
-      // Refresh events using the hook
-      refetch();
+      // 🔥 FIXED: Invalidate caches first, then refetch, then remove optimistic event
+      // This ensures the real event appears before removing the optimistic one
+      console.log('🔄 Invalidating event caches...');
+      await invalidateEventCaches(teamId);
       
-      // Close modal
-      setShowEventModal(false);
+      // Refetch current queries and wait for completion
+      console.log('🔄 Refetching queries...');
+      await refetch();
+      
+      // 🔥 FIXED: Remove optimistic event AFTER refetch completes
+      // This prevents the event from disappearing during the refetch
+      setOptimisticEvents(prev => prev.filter(e => e.id !== tempId));
+      
+      console.log('✅ Event creation complete and caches invalidated');
       
     } catch (error) {
-      console.error('Error creating event:', error);
-      Alert.alert('Error', 'Failed to create event. Please try again.');
+      console.error('❌ Exception creating event:', error);
+      setOptimisticEvents(prev => prev.filter(e => e.id !== tempId));
+      Alert.alert('Error', `Failed to create event: ${error.message || 'Unknown error'}`);
     }
-  }, [teamId, refetch]);
-
-  const formatHourTo12Hour = (hour) => {
-    if (hour === 0) return '12:00 AM';
-    if (hour === 12) return '12:00 PM';
-    if (hour < 12) return `${hour}:00 AM`;
-    return `${hour - 12}:00 PM`;
-  };
+  }, [teamId, teamColors, refetch, invalidateEventCaches]);
 
   const handleEventPress = (event) => {
-    setSelectedEvent(event);
+    // Format event for details modal
+    // Ensure we have valid date objects
+    const startTimeDate = event.startTime ? new Date(event.startTime) : null;
+    const endTimeDate = event.endTime ? new Date(event.endTime) : null;
+    
+    const formattedEvent = {
+      ...event,
+      eventType: event.eventType || event.type,
+      startTime: startTimeDate && !isNaN(startTimeDate.getTime()) ? formatTime(startTimeDate) : '',
+      endTime: endTimeDate && !isNaN(endTimeDate.getTime()) ? formatTime(endTimeDate) : '',
+      date: startTimeDate && !isNaN(startTimeDate.getTime()) 
+        ? startTimeDate.toLocaleDateString() 
+        : new Date().toLocaleDateString(),
+      postTo: event.type === 'personal' ? 'Personal' : 'Team'
+    };
+    setSelectedEvent(formattedEvent);
     setShowEventDetailsModal(true);
   };
 
   const handleEditEvent = (event) => {
-    // Pre-fill the creation modal with the event data for editing
+    // Handle both Date objects and already-formatted strings
+    let startTimeValue = event.startTime;
+    let endTimeValue = event.endTime;
+    
+    // If startTime/endTime are already formatted strings, use them directly
+    // Otherwise, format them from Date objects
+    if (startTimeValue && typeof startTimeValue !== 'string') {
+      const startDate = new Date(startTimeValue);
+      startTimeValue = !isNaN(startDate.getTime()) ? formatTime(startDate) : '';
+    }
+    if (endTimeValue && typeof endTimeValue !== 'string') {
+      const endDate = new Date(endTimeValue);
+      endTimeValue = !isNaN(endDate.getTime()) ? formatTime(endDate) : '';
+    }
+    
     setModalPrefilledData({
       eventType: event.type || event.eventType,
-      date: event.date,
-      time: event.startTime,
-      endTime: event.endTime,
-      title: event.title,
-      location: event.location,
-      recurring: event.recurring,
-      notes: event.notes,
-      postTo: event.postTo
+      date: event.date || (event.startTime ? new Date(event.startTime).toLocaleDateString() : new Date().toLocaleDateString()),
+      time: startTimeValue || '',
+      endTime: endTimeValue || '',
+      title: event.title || '',
+      location: event.location || '',
+      recurring: event.recurring || 'None',
+      notes: event.notes || '',
+      postTo: event.postTo || 'Team'
     });
     setShowEventModal(true);
   };
 
+  // Optimistic delete event
   const handleDeleteEvent = useCallback(async (event) => {
-    try {
       Alert.alert(
         'Delete Event',
         `Are you sure you want to delete "${event.title}"?`,
@@ -253,651 +367,110 @@ const CalendarScreen = ({ navigation }) => {
             text: 'Delete',
             style: 'destructive',
             onPress: async () => {
-              console.log('Deleting event:', event.title);
-              
-              const { success, error } = await deleteEvent(event.id);
+            const eventId = event.id;
+            
+            // Optimistically remove from UI
+            setDeletedEventIds(prev => new Set([...prev, eventId]));
+            setShowEventDetailsModal(false);
+            
+            try {
+              const { success, error } = await deleteEvent(eventId);
               
               if (error) {
-                console.error('Error deleting event:', error);
+                // Revert optimistic delete on error
+                setDeletedEventIds(prev => {
+                  const newSet = new Set(prev);
+                  newSet.delete(eventId);
+                  return newSet;
+                });
                 Alert.alert('Error', 'Failed to delete event. Please try again.');
                 return;
               }
               
-              console.log('Event deleted successfully');
+              // Remove from deleted set after successful delete
+              setDeletedEventIds(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(eventId);
+                return newSet;
+              });
               
-              // Refresh events using the hook
-              refetch();
+              // Invalidate all event caches to refresh calendar and home screen
+              await invalidateEventCaches(teamId);
               
-              // Close details modal
-              setShowEventDetailsModal(false);
+              // Refetch current queries
+              await refetch();
+              
+            } catch (error) {
+              // Revert on error
+              setDeletedEventIds(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(eventId);
+                return newSet;
+              });
+              Alert.alert('Error', 'Failed to delete event. Please try again.');
+            }
             }
           }
         ]
       );
-    } catch (error) {
-      console.error('Error deleting event:', error);
-      Alert.alert('Error', 'Failed to delete event. Please try again.');
-    }
-  }, [refetch]);
+  }, [refetch, invalidateEventCaches, teamId]);
 
-  const renderHeader = () => {
-    const getHeaderTitle = () => {
-      switch (currentView) {
-        case CALENDAR_VIEWS.MONTH:
-          return `${MONTHS[currentDate.getMonth()]} ${currentDate.getFullYear()}`;
-        case CALENDAR_VIEWS.WEEK:
-          // Show week range with abbreviated months
-          const startOfWeek = new Date(currentDate);
-          startOfWeek.setDate(currentDate.getDate() - currentDate.getDay());
-          const endOfWeek = new Date(startOfWeek);
-          endOfWeek.setDate(startOfWeek.getDate() + 6);
-          
-          if (startOfWeek.getMonth() === endOfWeek.getMonth()) {
-            return `${MONTHS_SHORT[startOfWeek.getMonth()]} ${startOfWeek.getDate()}-${endOfWeek.getDate()}, ${startOfWeek.getFullYear()}`;
-          } else {
-            return `${MONTHS_SHORT[startOfWeek.getMonth()]} ${startOfWeek.getDate()} - ${MONTHS_SHORT[endOfWeek.getMonth()]} ${endOfWeek.getDate()}, ${startOfWeek.getFullYear()}`;
-          }
-        case CALENDAR_VIEWS.DAY:
-          return `${MONTHS_SHORT[currentDate.getMonth()]} ${currentDate.getDate()}, ${currentDate.getFullYear()}`;
-        default:
-          return '';
-      }
-    };
-
-    const handleNavigation = (direction) => {
-      switch (currentView) {
-        case CALENDAR_VIEWS.MONTH:
-          navigateMonth(direction);
-          break;
-        case CALENDAR_VIEWS.WEEK:
-          navigateWeek(direction);
-          break;
-        case CALENDAR_VIEWS.DAY:
-          navigateDay(direction);
-          break;
-      }
-    };
-
-    return (
-      <View style={styles.header}>
-        <View style={styles.headerNavigation}>
-          <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons name="arrow-back" size={16} color={COLORS.WHITE} />
-          </TouchableOpacity>
-          
-          <View style={styles.monthNavigation}>
-            <TouchableOpacity 
-              style={styles.navButton}
-              onPress={() => handleNavigation(-1)}
-            >
-              <Ionicons name="chevron-back" size={16} color={COLORS.WHITE} />
-            </TouchableOpacity>
-            
-            <Text style={styles.headerTitle}>{getHeaderTitle()}</Text>
-            
-            <TouchableOpacity 
-              style={styles.navButton}
-              onPress={() => handleNavigation(1)}
-            >
-              <Ionicons name="chevron-forward" size={16} color={COLORS.WHITE} />
-            </TouchableOpacity>
-          </View>
-          
-          <TouchableOpacity 
-            style={styles.addButton}
-            onPress={() => {
-              setModalPrefilledData({
-                date: currentDate.toLocaleDateString()
-              });
-              setShowEventModal(true);
-            }}
-          >
-            <Ionicons name="add" size={16} color="#FFFFFF" />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.viewToggle}>
-          {Object.values(CALENDAR_VIEWS).map((view) => (
-            <TouchableOpacity
-              key={view}
-              style={[
-                styles.viewToggleButton,
-                currentView === view && styles.viewToggleButtonActive
-              ]}
-              onPress={() => setCurrentView(view)}
-            >
-              <Text style={[
-                styles.viewToggleText,
-                currentView === view && styles.viewToggleTextActive
-              ]}>
-                {view.charAt(0).toUpperCase() + view.slice(1)}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-    );
-  };
-
-  const renderMonthView = () => {
-    return (
-      <>
-        {/* Days of week header */}
-        <View style={styles.daysOfWeekHeader}>
-          {DAYS_OF_WEEK.map((day) => (
-            <View key={day} style={styles.dayOfWeekCell}>
-              <Text style={styles.dayOfWeekText}>{day}</Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Calendar grid */}
-        <View style={styles.calendarGrid}>
-          {monthDays.map((day, index) => {
-            const isCurrentMonth = day.getMonth() === currentDate.getMonth();
-            const isToday = day.toDateString() === new Date().toDateString();
-            const isSelected = day.toDateString() === selectedDate.toDateString();
-
-            return (
-              <TouchableOpacity
-                key={index}
-                style={[
-                  styles.dayCell,
-                  !isCurrentMonth && styles.dayCellOtherMonth,
-                  isSelected && {
-                    backgroundColor: COLORS.BRAND_LUPINE,
-                    shadowColor: COLORS.BRAND_LUPINE,
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.25,
-                    shadowRadius: 4,
-                    elevation: 3,
-                  },
-                  isToday && !isSelected && {
-                    backgroundColor: 'rgba(42, 26, 31, 0.3)',
-                    shadowColor: 'transparent',
-                    shadowOffset: { width: 0, height: 0 },
-                    shadowOpacity: 0,
-                    shadowRadius: 0,
-                    elevation: 0,
-                  },
-                ]}
-                onPress={() => handleDatePress(day)}
-              >
-                <Text style={[
-                  styles.dayText,
-                  !isCurrentMonth && styles.dayTextOtherMonth,
-                  isToday && styles.dayTextToday,
-                  isSelected && styles.dayTextSelected,
-                ]}>
-                  {day.getDate()}
-                </Text>
-                {/* Render event indicators */}
-                {(() => {
-                  const dayEvents = events.filter(event => {
-                    if (!event || !event.startTime) return false;
-                    const eventDate = new Date(event.startTime);
-                    return eventDate.toDateString() === day.toDateString();
-                  });
-                  
-                  if (dayEvents.length > 0) {
-                    return (
-                      <View style={styles.eventIndicators}>
-                        {dayEvents.slice(0, 3).map((event, eventIndex) => (
-                          <View
-                            key={eventIndex}
-                            style={[
-                              styles.eventIndicator,
-                              { backgroundColor: COLORS.ERROR }
-                            ]}
-                          />
-                        ))}
-                        {dayEvents.length > 3 && (
-                          <Text style={styles.moreEventsText}>+{dayEvents.length - 3}</Text>
-                        )}
-                      </View>
-                    );
-                  }
-                  return null;
-                })()}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </>
-    );
-  };
-
-  const renderWeekView = () => {
-    // Use memoized values instead of computing inline
-
-    const formatHour = (hour) => {
-      if (hour === 0) return '12 AM';
-      if (hour === 12) return '12 PM';
-      if (hour < 12) return `${hour} AM`;
-      return `${hour - 12} PM`;
-    };
-
-    const renderEvent = (event) => (
-      <TouchableOpacity
-        key={event.id}
-        style={[
-          styles.eventBlock,
-          {
-            backgroundColor: event.color,
-            top: event.startTime * 60, // 60px per hour
-            height: event.duration * 60,
-          }
-        ]}
-        onPress={() => {
-          // Convert event to proper format for details modal
-          const eventData = {
-            ...event,
-            eventType: event.eventType,
-            startTime: formatHourTo12Hour(event.startTime),
-            endTime: formatHourTo12Hour(event.startTime + event.duration),
-            date: new Date(event.startTime).toLocaleDateString(),
-            postTo: event.type === 'personal' ? 'Personal' : 'Team'
-          };
-          handleEventPress(eventData);
-        }}
-      >
-        <Text style={styles.eventTitle} numberOfLines={1}>
-          {event.title}
-        </Text>
-        <Text style={styles.eventTime} numberOfLines={1}>
-          {formatHour(event.startTime)}
-        </Text>
-      </TouchableOpacity>
-    );
-
-    return (
-      <View style={styles.weekView}>
-        {/* Days header */}
-        <View style={styles.weekHeader}>
-          <View style={styles.timeColumn} />
-          {weekDays.map((day, index) => {
-            const isToday = day.toDateString() === new Date().toDateString();
-            return (
-              <View key={index} style={styles.dayColumn}>
-                <Text style={[
-                  styles.weekDayText,
-                  isToday && { 
-                    color: teamColors.primary,
-                    fontWeight: FONT_WEIGHTS.SEMIBOLD
-                  }
-                ]}>
-                  {DAYS_OF_WEEK[index]}
-                </Text>
-                <Text style={[
-                  styles.weekDateText,
-                  isToday && { 
-                    color: teamColors.primary,
-                    fontWeight: FONT_WEIGHTS.BOLD
-                  }
-                ]}>
-                  {day.getDate()}
-                </Text>
-              </View>
-            );
-          })}
-        </View>
-
-        {/* Time grid */}
-        <ScrollView style={styles.weekScrollView} showsVerticalScrollIndicator={false}>
-          <View style={styles.weekGrid}>
-            {hours.map((hour) => (
-              <View key={hour} style={styles.hourRow}>
-                <View style={styles.timeColumn}>
-                  <Text style={styles.timeText}>{formatHour(hour)}</Text>
-                </View>
-                {weekDays.map((day, dayIndex) => (
-                  <TouchableOpacity
-                    key={dayIndex}
-                    style={[
-                      styles.hourCell,
-                      dayIndex === 0 && { backgroundColor: '#2A2A2A' } // Debug: highlight first column
-                    ]}
-                    onPress={() => {
-                      const startTime = formatHourTo12Hour(hour);
-                      const endTime = formatHourTo12Hour(hour + 1); // Default 1-hour duration
-                      setModalPrefilledData({
-                        date: day.toLocaleDateString(),
-                        time: startTime,
-                        endTime: endTime
-                      });
-                      setShowEventModal(true);
-                      console.log('Time slot pressed:', day, hour, 'dayIndex:', dayIndex, 'Time:', startTime);
-                    }}
-                  >
-                    {/* Render events for this day/hour */}
-                    {weekEvents
-                      .filter(event => 
-                        event.dayIndex === dayIndex && 
-                        hour >= event.startTime && 
-                        hour < event.startTime + event.duration
-                      )
-                      .map(event => 
-                        hour === event.startTime ? renderEvent(event) : null
-                      )}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-      </View>
-    );
-  };
-
-  const renderDayView = () => {
-    const hours = Array.from({ length: 24 }, (_, i) => i);
-    const today = currentDate;
-    
-    // Team event templates
-    const teamEventTemplates = [
-      { id: 'practice', title: 'Practice', color: teamColors.primary, icon: 'P' },
-      { id: 'game', title: 'Game', color: teamColors.secondary, icon: 'G' },
-      { id: 'meeting', title: 'Meeting', color: '#10B981', icon: 'M' },
-      { id: 'film', title: 'Film', color: '#8B5CF6', icon: 'F' },
-      { id: 'conditioning', title: 'Conditioning', color: '#F59E0B', icon: 'T' },
-    ];
-
-    // Get events for the selected day from database
-    const dayEvents = events
-      .filter(event => {
-        if (!event || !event.startTime) return false;
-        const eventDate = new Date(event.startTime);
-        return eventDate.toDateString() === today.toDateString();
-      })
-      .map(event => {
-        const startHour = new Date(event.startTime).getHours();
-        const endHour = new Date(event.endTime).getHours();
-        const duration = Math.max(1, endHour - startHour);
-        
-        return {
-          ...event,
-          startTime: startHour,
-          duration
-        };
-      })
-      .sort((a, b) => a.startTime - b.startTime); // Sort by start time
-
-    const formatHour = (hour) => {
-      if (hour === 0) return '12 AM';
-      if (hour === 12) return '12 PM';
-      if (hour < 12) return `${hour} AM`;
-      return `${hour - 12} PM`;
-    };
-
-    const renderEvent = (event) => (
-      <TouchableOpacity
-        key={event.id}
-        style={[
-          styles.dayEventBlock,
-          {
-            backgroundColor: event.color,
-            top: 0,
-            height: event.duration * 60,
-          }
-        ]}
-        onPress={() => {
-          // Convert event to proper format for details modal
-          const eventData = {
-            ...event,
-            eventType: event.eventType,
-            startTime: formatHour(event.startTime),
-            endTime: formatHour(event.startTime + event.duration),
-            date: today.toLocaleDateString(),
-            postTo: event.type === 'personal' ? 'Personal' : 'Team'
-          };
-          handleEventPress(eventData);
-        }}
-      >
-        <View style={styles.dayEventContent}>
-          <Text style={styles.dayEventTitle}>{event.title}</Text>
-          <Text style={styles.dayEventTime}>
-            {formatHour(event.startTime)} - {formatHour(event.startTime + event.duration)}
-          </Text>
-          {event.location && event.location.trim() && (
-            <Text style={styles.dayEventLocation}>{event.location}</Text>
-          )}
-          {event.type === 'team' && typeof event.attending === 'number' && (
-            <Text style={styles.dayEventAttending}>
-              {event.attending}/{event.total} attending
-            </Text>
-          )}
-          {event.notes && typeof event.notes === 'string' && event.notes.trim() && (
-            <Text style={styles.dayEventNotes} numberOfLines={2}>
-              {event.notes}
-            </Text>
-          )}
-        </View>
-      </TouchableOpacity>
-    );
-
-    return (
-      <View style={styles.dayView}>
-        {/* Day Header with Quick Actions */}
-        <View style={styles.dayHeader}>
-          <View style={styles.dayHeaderLeft}>
-            <Text style={styles.dayTitle}>
-              {today.toLocaleDateString('en-US', { weekday: 'long' })}
-            </Text>
-            <Text style={styles.dayDate}>
-              {MONTHS_SHORT[today.getMonth()]} {today.getDate()}, {today.getFullYear()}
-            </Text>
-          </View>
-          
-          <TouchableOpacity 
-            style={styles.addEventButton}
-            onPress={() => {
-              setModalPrefilledData({
-                date: currentDate.toLocaleDateString()
-              });
-              setShowEventModal(true);
-            }}
-          >
-            <Ionicons name="add" size={16} color="#FFFFFF" />
-            <Text style={styles.addEventButtonText}>Add Event</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Team Event Templates */}
-        <View style={styles.eventTemplatesSection}>
-          <Text style={styles.eventTemplatesTitle}>Quick Add</Text>
-          <ScrollView 
-            horizontal 
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.eventTemplatesContainer}
-          >
-            {teamEventTemplates.map((template) => (
-              <TouchableOpacity
-                key={template.id}
-                style={[
-                  styles.eventTemplate, 
-                  { 
-                    backgroundColor: template.id === 'game' 
-                      ? '#F3F4F6' // Light gray background for black game button
-                      : `${template.color}15` 
-                  }
-                ]}
-                onPress={() => {
-                  setModalPrefilledData({
-                    eventType: template.id,
-                    date: currentDate.toLocaleDateString()
-                  });
-                  setShowEventModal(true);
-                }}
-              >
-                <View style={[
-                  styles.eventTemplateIcon, 
-                  { 
-                    backgroundColor: template.id === 'game' ? '#1F2937' : template.color // Darker gray for game to show white text
-                  }
-                ]}>
-                  <Text style={styles.eventTemplateIconText}>{template.icon}</Text>
-                </View>
-                <Text style={styles.eventTemplateText} numberOfLines={2}>
-                  {template.title}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-
-        {/* Day Timeline */}
-        <ScrollView style={styles.dayScrollView} showsVerticalScrollIndicator={false}>
-          <View style={styles.dayTimeline}>
-            {hours.map((hour) => {
-              const hourEvents = dayEvents.filter(event => 
-                hour >= event.startTime && hour < event.startTime + event.duration
-              );
-              
-              return (
-                <View key={hour} style={styles.dayHourRow}>
-                  <View style={styles.dayTimeColumn}>
-                    <Text style={styles.dayTimeText}>{formatHour(hour)}</Text>
-                  </View>
-                  <TouchableOpacity 
-                    style={styles.dayEventSlot}
-                    onPress={() => {
-                      const startTime = formatHourTo12Hour(hour);
-                      const endTime = formatHourTo12Hour(hour + 1); // Default 1-hour duration
-                      setModalPrefilledData({
-                        date: today.toLocaleDateString(),
-                        time: startTime,
-                        endTime: endTime
-                      });
-                      setShowEventModal(true);
-                      console.log('Day time slot pressed:', formatHour(hour), 'Time:', startTime);
-                    }}
-                  >
-                    {hourEvents
-                      .filter(event => hour === event.startTime)
-                      .map(event => renderEvent(event))}
-                  </TouchableOpacity>
-                </View>
-              );
-            })}
-          </View>
-        </ScrollView>
-      </View>
-    );
-  };
-
-  const renderUpcomingEvents = () => {
-    // Use the upcoming events from the hook
-    if (!upcomingEvents || upcomingEvents.length === 0) {
-      return (
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Upcoming Events</Text>
-          </View>
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>No upcoming events</Text>
-          </View>
-        </View>
-      );
-    }
-    
-    const formatEventDate = (date) => {
-      const today = new Date();
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      
-      if (date.toDateString() === today.toDateString()) {
-        return 'Today';
-      } else if (date.toDateString() === tomorrow.toDateString()) {
-        return 'Tomorrow';
-      } else {
-        const options = { month: 'short', day: 'numeric' };
-        return date.toLocaleDateString('en-US', options);
-      }
-    };
-
-    return (
-      <View style={styles.upcomingSection}>
-        <View style={styles.upcomingSectionHeader}>
-          <Text style={styles.upcomingSectionTitle}>Next 5 Events</Text>
-          <TouchableOpacity 
-            style={styles.viewAllButton}
-            onPress={() => setCurrentView(CALENDAR_VIEWS.WEEK)}
-          >
-            <Text style={styles.viewAllButtonText}>View All</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.eventsList}>
-          {upcomingEvents.map((event, index) => (
-            <TouchableOpacity 
-              key={event.id} 
-              style={[
-                styles.eventItem,
-                index === upcomingEvents.length - 1 && styles.eventItemLast
-              ]}
-              onPress={() => {
-                console.log('Event pressed:', event.title);
-                // TODO: Show event details or edit modal
-              }}
-            >
-              <View style={styles.eventLeft}>
-                <View style={[styles.eventTypeBadge, { backgroundColor: event.color }]}>
-                  <Text style={styles.eventTypeText}>
-                    {event.type === 'practice' ? 'P' : 
-                     event.type === 'game' ? 'G' : 
-                     event.type === 'meeting' ? 'M' :
-                     event.type === 'review' ? 'F' : 'T'}
-                  </Text>
-                </View>
-                <View style={styles.eventDetails}>
-                  <Text style={styles.eventTitle}>{event.title}</Text>
-                  <Text style={styles.eventMeta}>
-                    {formatEventDate(event.date)} • {event.time} • {event.location}
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.eventRight}>
-                <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
-              </View>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-    );
-  };
-
-  const renderCalendarContent = () => {
-    switch (currentView) {
-      case CALENDAR_VIEWS.MONTH:
-        return renderMonthView();
-      case CALENDAR_VIEWS.WEEK:
-        return renderWeekView();
-      case CALENDAR_VIEWS.DAY:
-        return renderDayView();
-      default:
-        return renderMonthView();
-    }
-  };
 
   // Show skeleton only when there's no cached data (first-time load)
   if (isLoading && !events.length) {
     return <CalendarSkeletonLoader />;
-  }
+      }
 
-  return (
+    return (
     <View style={styles.container}>
       <View style={[styles.statusBarArea, { height: insets.top }]} />
-      <View style={styles.headerContainer}>
-        {renderHeader()}
-      </View>
       
+      {/* Header */}
+      <View style={styles.header}>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+          <Ionicons name="arrow-back" size={18} color={COLORS.WHITE} />
+          </TouchableOpacity>
+          
+        <Text style={styles.headerTitle}>Schedule</Text>
+          
+          <TouchableOpacity 
+            style={styles.addButton}
+            onPress={() => {
+              // Format date as MM/DD/YYYY for consistency
+              const month = (currentDate.getMonth() + 1).toString().padStart(2, '0');
+              const day = currentDate.getDate().toString().padStart(2, '0');
+              const year = currentDate.getFullYear();
+              setModalPrefilledData({
+                date: `${month}/${day}/${year}`
+              });
+              setShowEventModal(true);
+            }}
+          >
+          <Ionicons name="add" size={18} color={COLORS.WHITE} />
+          </TouchableOpacity>
+        </View>
+
+      {/* Date Selector */}
+      <DateSelector
+        currentDate={currentDate}
+        onDateSelect={navigateToDate}
+        onScrollIndexChange={setDateScrollIndex}
+        showBackToToday={shouldShowBackToToday}
+        onBackToToday={navigateToToday}
+      />
+
+      {/* Events List */}
       <ScrollView
         style={styles.content}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight }]}
+        contentContainerStyle={[
+          styles.scrollContent, 
+          { paddingBottom: adjustedTabBarHeight },
+          dayEvents.length === 0 && styles.scrollContentEmpty
+        ]}
         refreshControl={
           <RefreshControl
             refreshing={isFetching}
@@ -909,11 +482,26 @@ const CalendarScreen = ({ navigation }) => {
           />
         }
       >
-        {renderCalendarContent()}
-        {currentView === CALENDAR_VIEWS.MONTH && renderUpcomingEvents()}
+        <EventsList
+          events={dayEvents}
+          currentDate={currentDate}
+          isToday={isToday}
+          onEventPress={handleEventPress}
+          onAddEvent={() => {
+            // Format date as MM/DD/YYYY for consistency
+            const month = (currentDate.getMonth() + 1).toString().padStart(2, '0');
+            const day = currentDate.getDate().toString().padStart(2, '0');
+            const year = currentDate.getFullYear();
+            setModalPrefilledData({
+              date: `${month}/${day}/${year}`
+            });
+            setShowEventModal(true);
+          }}
+          teamColors={teamColors}
+        />
       </ScrollView>
 
-      {/* Event Creation Modal - Fully unmount when hidden */}
+      {/* Event Creation Modal */}
       {showEventModal && (
         <EventCreationModal
           visible={showEventModal}
@@ -924,7 +512,7 @@ const CalendarScreen = ({ navigation }) => {
         />
       )}
 
-      {/* Event Details Modal - Fully unmount when hidden */}
+      {/* Event Details Modal */}
       {showEventDetailsModal && (
         <EventDetailsModal
           visible={showEventDetailsModal}
@@ -946,107 +534,35 @@ const styles = StyleSheet.create({
   statusBarArea: {
     backgroundColor: COLORS.BACKGROUND_PRIMARY,
   },
-  headerContainer: {
-    backgroundColor: COLORS.BACKGROUND_PRIMARY,
-  },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 20,
+    paddingVertical: 16,
     backgroundColor: COLORS.BACKGROUND_PRIMARY,
   },
   backButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: COLORS.BACKGROUND_OVERLAY,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    elevation: 1,
-    flexShrink: 0,
-  },
-  addButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: COLORS.BACKGROUND_OVERLAY,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    elevation: 1,
-    flexShrink: 0,
-  },
-  monthNavigation: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flex: 1,
-    justifyContent: 'center',
-    maxWidth: 200,
-  },
-  headerNavigation: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-    paddingHorizontal: 16,
-    justifyContent: 'space-between',
-  },
-  navButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: COLORS.BACKGROUND_OVERLAY,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexShrink: 0,
   },
   headerTitle: {
     ...TYPOGRAPHY.title,
     color: COLORS.TEXT_PRIMARY,
-    textAlign: 'center',
-    minWidth: 120,
-    maxWidth: 150,
+    fontSize: scaleFont(FONT_SIZES.BASE),
+    fontWeight: FONT_WEIGHTS.BOLD,
   },
-  viewToggle: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.BACKGROUND_CARD,
-    borderRadius: 12,
-    padding: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  viewToggleButton: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 9,
+  addButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.BACKGROUND_OVERLAY,
+    justifyContent: 'center',
     alignItems: 'center',
-  },
-  viewToggleButtonActive: {
-    backgroundColor: COLORS.BACKGROUND_SECONDARY,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  viewToggleText: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.TEXT_MUTED,
-  },
-  viewToggleTextActive: {
-    color: COLORS.TEXT_PRIMARY,
-    fontWeight: FONT_WEIGHTS.SEMIBOLD,
   },
   content: {
     flex: 1,
@@ -1056,450 +572,8 @@ const styles = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 0,
   },
-  daysOfWeekHeader: {
-    flexDirection: 'row',
-    marginBottom: 16,
-    width: '100%',
-    paddingHorizontal: isTablet ? 32 : 24,
-  },
-  dayOfWeekCell: {
-    flex: 1,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  dayOfWeekText: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.TEXT_MUTED,
-    letterSpacing: 0.5,
-  },
-  calendarGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    width: '100%',
-    paddingHorizontal: isTablet ? 32 : 24,
-  },
-  dayCell: {
-    width: `${100/7}%`,
-    aspectRatio: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 12,
-    marginBottom: 4,
-    backgroundColor: 'transparent',
-    paddingHorizontal: 1,
-  },
-  dayCellOtherMonth: {
-    backgroundColor: 'transparent',
-  },
-  dayCellToday: {
-    backgroundColor: COLORS.BRAND_LUPINE,
-    shadowColor: COLORS.BRAND_LUPINE,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  dayCellSelected: {
-    backgroundColor: COLORS.BRAND_LUPINE,
-    shadowColor: COLORS.BRAND_LUPINE,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  dayText: {
-    ...TYPOGRAPHY.body,
-    color: COLORS.TEXT_PRIMARY,
-    lineHeight: 22,
-  },
-  dayTextOtherMonth: {
-    color: COLORS.TEXT_MUTED,
-    fontWeight: FONT_WEIGHTS.REGULAR,
-  },
-  dayTextToday: {
-    color: COLORS.WHITE,
-    fontWeight: FONT_WEIGHTS.SEMIBOLD,
-  },
-  dayTextSelected: {
-    color: COLORS.TEXT_PRIMARY,
-    fontWeight: FONT_WEIGHTS.SEMIBOLD,
-  },
-  weekView: {
-    flex: 1,
-    backgroundColor: COLORS.BACKGROUND_PRIMARY,
-    paddingHorizontal: 16,
-  },
-  weekHeader: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.BACKGROUND_SECONDARY,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.TEXT_TERTIARY,
-    paddingVertical: 12,
-    paddingHorizontal: 0,
-  },
-  timeColumn: {
-    width: 45,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.LIGHT_GRAY,
-    flexShrink: 0,
-  },
-  dayColumn: {
-    flex: 1,
-    alignItems: 'center',
-    minWidth: 35,
-  },
-  weekDayText: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.TEXT_MUTED,
-    marginBottom: 4,
-  },
-  weekDayTextToday: {
-    color: COLORS.ERROR, // Red for today indicator
-    fontWeight: FONT_WEIGHTS.SEMIBOLD,
-  },
-  weekDateText: {
-    ...TYPOGRAPHY.body,
-    color: COLORS.TEXT_PRIMARY,
-  },
-  weekDateTextToday: {
-    color: COLORS.ERROR, // Red for today indicator
-    fontWeight: FONT_WEIGHTS.BOLD,
-  },
-  weekScrollView: {
-    flex: 1,
-  },
-  weekGrid: {
-    paddingHorizontal: 0,
-  },
-  hourRow: {
-    flexDirection: 'row',
-    height: 60,
-    borderBottomWidth: 0.5,
-    borderBottomColor: COLORS.TEXT_TERTIARY,
-  },
-  hourCell: {
-    flex: 1,
-    borderRightWidth: 0.5,
-    borderRightColor: COLORS.TEXT_TERTIARY,
-    position: 'relative',
-    minWidth: 35,
-  },
-  timeText: {
-    fontSize: scaleFont(FONT_SIZES.XS),
-    fontWeight: FONT_WEIGHTS.MEDIUM,
-    color: COLORS.TEXT_TERTIARY,
-    textAlign: 'center',
-  },
-  eventBlock: {
-    position: 'absolute',
-    left: 2,
-    right: 2,
-    borderRadius: 6,
-    padding: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2,
-    elevation: 2,
-    zIndex: 10,
-  },
-  eventTitle: {
-    ...TYPOGRAPHY.captionSmall,
-    color: COLORS.WHITE,
-    marginBottom: 2,
-  },
-  eventTime: {
-    ...TYPOGRAPHY.captionSmall,
-    color: COLORS.WHITE,
-    opacity: 0.9,
-  },
-  dayView: {
-    flex: 1,
-    backgroundColor: COLORS.BACKGROUND_PRIMARY,
-  },
-  dayHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    backgroundColor: COLORS.BACKGROUND_SECONDARY,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.TEXT_TERTIARY,
-  },
-  dayHeaderLeft: {
-    flex: 1,
-  },
-  dayTitle: {
-    fontSize: scaleFont(FONT_SIZES.LG),
-    fontWeight: FONT_WEIGHTS.BOLD,
-    color: COLORS.TEXT_PRIMARY,
-    marginBottom: 2,
-  },
-  dayDate: {
-    fontSize: scaleFont(FONT_SIZES.SM),
-    fontWeight: FONT_WEIGHTS.REGULAR,
-    color: COLORS.TEXT_TERTIARY,
-  },
-  addEventButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.PRIMARY_BLACK,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    shadowColor: COLORS.PRIMARY_BLACK,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  addEventButtonText: {
-    color: COLORS.TEXT_PRIMARY,
-    fontSize: scaleFont(FONT_SIZES.SM),
-    fontWeight: FONT_WEIGHTS.MEDIUM,
-    marginLeft: 6,
-  },
-  eventTemplatesSection: {
-    paddingVertical: 16,
-    backgroundColor: COLORS.BACKGROUND_SECONDARY,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.TEXT_TERTIARY,
-  },
-  eventTemplatesTitle: {
-    fontSize: scaleFont(FONT_SIZES.BASE),
-    fontWeight: FONT_WEIGHTS.SEMIBOLD,
-    color: COLORS.TEXT_PRIMARY,
-    paddingHorizontal: 16,
-    marginBottom: 12,
-  },
-  eventTemplatesContainer: {
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  eventTemplate: {
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    width: 90, // Fixed width for all buttons
-  },
-  eventTemplateIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 6,
-  },
-  eventTemplateIconText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: FONT_WEIGHTS.BOLD,
-  },
-  eventTemplateText: {
-    fontSize: scaleFont(FONT_SIZES.XS),
-    fontWeight: FONT_WEIGHTS.MEDIUM,
-    color: COLORS.PRIMARY_BLACK,
-    textAlign: 'center',
-    lineHeight: 14,
-  },
-  dayScrollView: {
-    flex: 1,
-  },
-  dayTimeline: {
-    paddingHorizontal: 16,
-  },
-  dayHourRow: {
-    flexDirection: 'row',
-    height: 60,
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#E5E7EB',
-  },
-  dayTimeColumn: {
-    width: 60,
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingTop: 8,
-  },
-  dayTimeText: {
-    fontSize: scaleFont(FONT_SIZES.XS),
-    fontWeight: FONT_WEIGHTS.MEDIUM,
-    color: '#9CA3AF',
-  },
-  dayEventSlot: {
-    flex: 1,
-    marginLeft: 12,
-    position: 'relative',
-  },
-  dayEventBlock: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    borderRadius: 8,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 3,
-    zIndex: 10,
-  },
-  dayEventContent: {
-    flex: 1,
-  },
-  dayEventTitle: {
-    fontSize: scaleFont(FONT_SIZES.BASE),
-    fontWeight: FONT_WEIGHTS.SEMIBOLD,
-    color: '#FFFFFF',
-    marginBottom: 4,
-  },
-  dayEventTime: {
-    fontSize: scaleFont(FONT_SIZES.SM),
-    fontWeight: FONT_WEIGHTS.MEDIUM,
-    color: '#FFFFFF',
-    opacity: 0.9,
-    marginBottom: 4,
-  },
-  dayEventLocation: {
-    fontSize: scaleFont(FONT_SIZES.SM),
-    fontWeight: FONT_WEIGHTS.REGULAR,
-    color: '#FFFFFF',
-    opacity: 0.8,
-    marginBottom: 4,
-  },
-  dayEventAttending: {
-    fontSize: scaleFont(FONT_SIZES.XS),
-    fontWeight: FONT_WEIGHTS.MEDIUM,
-    color: '#FFFFFF',
-    opacity: 0.9,
-    marginBottom: 4,
-  },
-  dayEventNotes: {
-    fontSize: scaleFont(FONT_SIZES.SM),
-    fontWeight: FONT_WEIGHTS.REGULAR,
-    color: '#FFFFFF',
-    opacity: 0.8,
-    fontStyle: 'italic',
-  },
-  placeholderText: {
-    fontSize: scaleFont(FONT_SIZES.BASE),
-    color: '#9CA3AF',
-    fontStyle: 'italic',
-  },
-  upcomingSection: {
-    paddingHorizontal: isTablet ? 32 : 24,
-    paddingTop: 0,
-    paddingBottom: 16,
-  },
-  upcomingSectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-    marginTop: 0,
-  },
-  upcomingSectionTitle: {
-    ...TYPOGRAPHY.eventTitle,
-    color: COLORS.TEXT_PRIMARY,
-  },
-  viewAllButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: '#F1F3F4',
-  },
-  viewAllButtonText: {
-    fontSize: scaleFont(FONT_SIZES.SM),
-    fontWeight: FONT_WEIGHTS.MEDIUM,
-    color: COLORS.PRIMARY_BLACK,
-  },
-  eventsList: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  eventItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#E5E7EB',
-  },
-  eventItemLast: {
-    borderBottomWidth: 0,
-  },
-  eventLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  eventTypeBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  eventTypeText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: FONT_WEIGHTS.BOLD,
-  },
-  eventDetails: {
-    flex: 1,
-  },
-  eventTitle: {
-    fontSize: scaleFont(FONT_SIZES.BASE),
-    fontWeight: FONT_WEIGHTS.MEDIUM,
-    color: COLORS.PRIMARY_BLACK,
-    marginBottom: 2,
-  },
-  eventMeta: {
-    fontSize: scaleFont(FONT_SIZES.SM),
-    color: '#6B7280',
-    fontWeight: FONT_WEIGHTS.REGULAR,
-  },
-  eventRight: {
-    marginLeft: 8,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: scaleFont(FONT_SIZES.BASE),
-    color: '#3A3A3E',
-    textAlign: 'center',
-  },
-  eventIndicators: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    marginTop: 2,
-    gap: 2,
-  },
-  eventIndicator: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    marginHorizontal: 1,
-  },
-  moreEventsText: {
-    fontSize: scaleFont(FONT_SIZES.XS),
-    color: '#6B7280',
-    fontWeight: FONT_WEIGHTS.MEDIUM,
-    marginLeft: 2,
+  scrollContentEmpty: {
+    flexGrow: 1,
   },
 });
 

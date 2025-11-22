@@ -7,11 +7,13 @@ import {
   getEventsForMonth, 
   getEventsForWeek, 
   getEventsForDay, 
+  getEventsInRange,
   getUpcomingEvents,
   getTeamColors,
   getEventColor,
 } from '../api/events';
 import { dataCache } from '../utils/dataCache';
+import { getTodayAnchor, normalizeDate, addDays, getEndOfDay } from '../utils/dateUtils';
 
 const CALENDAR_VIEWS = {
   MONTH: 'month',
@@ -94,17 +96,30 @@ const fetchEventsByView = async (teamId, currentView, currentDate) => {
       return (await safeFetch(getEventsForWeek, teamId, weekStart)) || [];
     }
     case CALENDAR_VIEWS.DAY:
-      return (await safeFetch(getEventsForDay, teamId, currentDate)) || [];
+      // 🔥 FIXED: Fetch full year range (-365 to +365 days) to include past events
+      // This matches the DateSelector range and ensures past events are available
+      // Uses session anchor for consistent date calculations
+      const today = getTodayAnchor();
+      
+      const startDate = addDays(today, -365);
+      const endDate = getEndOfDay(addDays(today, 365));
+      
+      return (await safeFetch(getEventsInRange, teamId, startDate, endDate)) || [];
     default:
       return [];
   }
 };
 
 const fetchAndCacheEvents = async (teamId, currentView, currentDate, teamColors) => {
-  const dayKey = normalizeDateKey(currentDate);
-  if (!teamId || !dayKey) return [];
+  if (!teamId || !currentDate) return [];
 
-  const cacheKey = createEventsCacheKey(teamId, currentView, dayKey);
+  // 🔥 FIXED: For DAY view, use stable cache key for full year range
+  // This allows caching all events and reusing across day selections
+  // Note: This is for dataCache (local storage), not React Query cache
+  const cacheKey = currentView === CALENDAR_VIEWS.DAY
+    ? `calendarEvents_${teamId}_day_fullYear`
+    : createEventsCacheKey(teamId, currentView, normalizeDateKey(currentDate));
+  
   const cached = await cacheGet(cacheKey);
   if (cached) {
     devLog('📅 Using cached calendar events');
@@ -143,13 +158,25 @@ export function useTeamColors(teamId) {
   })[0];
 }
 
-const normalizeDateKey = (date) => date?.toISOString?.().split('T')[0] ?? null;
+// Normalize date to ISO string key for caching
+const normalizeDateKey = (date) => {
+  if (!date) return null;
+  const normalized = normalizeDate(date);
+  return normalized ? normalized.toISOString().split('T')[0] : null;
+};
 
 export function useCalendarEvents(teamId, currentView, currentDate, teamColors) {
+  // 🔥 FIXED: For DAY view, use a stable cache key that doesn't change per day
+  // This allows us to cache the full year range and reuse it across day selections
+  // React Query requires queryKey to be an array
+  const queryKey = currentView === CALENDAR_VIEWS.DAY 
+    ? ['calendarEvents', teamId, 'day', 'fullYear'] // Stable array key for full year range
+    : queryKeys.calendarEvents(teamId, currentView, normalizeDateKey(currentDate));
+  
   return useQueries({
     queries: [
       {
-        queryKey: queryKeys.calendarEvents(teamId, currentView, normalizeDateKey(currentDate)),
+        queryKey: queryKey,
         queryFn: () => fetchAndCacheEvents(teamId, currentView, currentDate, teamColors),
         enabled: !!teamId && !!currentDate,
         staleTime: CACHE_TTL.SHORT,
@@ -213,8 +240,8 @@ const usePrefetchAdjacentPeriods = (teamId, currentView, currentDate, teamColors
     const offset = offsets[currentView];
     if (!offset) return;
 
-    const nextDate = new Date(currentDate);
-    nextDate.setDate(currentDate.getDate() + offset);
+    // Use date utilities for consistent date calculations
+    const nextDate = addDays(currentDate, offset);
     const nextKey = normalizeDateKey(nextDate);
 
     devLog('🔮 Prefetching calendar view', { currentView, nextKey });

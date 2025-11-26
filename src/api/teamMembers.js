@@ -2,7 +2,12 @@ import { supabase } from '../lib/supabase';
 import { uploadChannelImage } from '../utils/imageUpload';
 
 // Fetch team members from the database
-export const fetchTeamMembers = async (teamId, query = '') => {
+export const fetchTeamMembers = async (supabaseClient, teamId, query = '') => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     console.log('🔍 fetchTeamMembers called with teamId:', teamId);
     
@@ -259,7 +264,12 @@ const generateGroupName = (members) => {
 // =============================================
 
 // Get team information (name, logo, colors)
-export const getTeamInfo = async (teamId) => {
+export const getTeamInfo = async (supabaseClient, teamId) => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     console.log('🏠 getTeamInfo called with teamId:', teamId);
     
@@ -574,7 +584,12 @@ export const uploadTeamLogo = async (teamId, imageUri) => {
 };
 
 // Check if user is team admin
-export const isTeamAdmin = async (teamId) => {
+export const isTeamAdmin = async (supabaseClient, teamId) => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return false;

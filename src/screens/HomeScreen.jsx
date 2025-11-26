@@ -25,7 +25,7 @@ import { BlurView } from 'expo-blur';
 import Svg, { Circle } from 'react-native-svg';
 import { useHomeData } from '../hooks/useHomeData';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { getEventsInRange, getEventColor } from '../api/events';
 import { EVENT_TYPES } from '../constants/eventTypes';
 import { getTodayAnchor, addDays } from '../utils/dateUtils';
@@ -81,6 +81,7 @@ const CountdownRing = ({ progress, size = 44, strokeWidth = 3, color = '#CCCCCC'
 };
 
 const HomeScreen = ({ navigation }) => {
+  const supabase = useSupabase();
   const insets = useSafeAreaInsets();
   const tabBarHeight = Platform.OS === 'ios' ? 70 : 60;
   const adjustedTabBarHeight = tabBarHeight + Math.max(insets.bottom - 18, 0);
@@ -100,15 +101,14 @@ const HomeScreen = ({ navigation }) => {
   // Fetch events for next 24 hours to check for games
   const now = new Date();
   const next24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  
   const { data: next24HoursEvents } = useQuery({
     queryKey: ['next24HoursEvents', teamId],
     queryFn: async () => {
-      if (!teamId) return [];
-      const result = await getEventsInRange(teamId, now, next24Hours);
+      if (!teamId || !supabase) return [];
+      const result = await getEventsInRange(supabase, teamId, now, next24Hours);
       return result.data || [];
     },
-    enabled: !!teamId,
+    enabled: !!teamId && !!supabase,
     staleTime: 2 * 60 * 1000, // 2 minutes
   });
   

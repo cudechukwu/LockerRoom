@@ -14,15 +14,16 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../constants/colors';
 import { getFontWeight, getFontSize } from '../constants/fonts';
-import { supabase } from '../lib/supabase';
 import ScreenBackground from '../components/ScreenBackground';
 import ProfileCard from '../components/ProfileCard';
 import { getTeamMemberProfiles } from '../api/profiles';
+import { useSupabase } from '../providers/SupabaseProvider';
 
 const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
 
 const RosterScreen = ({ navigation }) => {
+  const supabase = useSupabase();
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -62,7 +63,7 @@ const RosterScreen = ({ navigation }) => {
       setTeamId(teamMember.team_id);
 
       // Load all team member profiles
-      const { data: profilesData, error } = await getTeamMemberProfiles(teamMember.team_id);
+      const { data: profilesData, error } = await getTeamMemberProfiles(supabase, teamMember.team_id);
       if (error) throw error;
       
       setProfiles(profilesData || []);

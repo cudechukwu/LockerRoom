@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQueryClient } from '@tanstack/react-query';
+import { useRoute, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
 import { TYPOGRAPHY, FONT_SIZES, FONT_WEIGHTS, scaleFont } from '../constants/typography';
@@ -17,16 +18,21 @@ import { useCalendarData } from '../hooks/useCalendarData';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { queryKeys } from '../hooks/queryKeys';
 import { createEvent, updateEvent, deleteEvent, formatEventData } from '../api/events';
-import { supabase } from '../lib/supabase';
+import { getUserAttendanceStatus } from '../api/attendance';
+import { useSupabase } from '../providers/SupabaseProvider';
+import { useRealtimeAttendanceMultiple } from '../hooks/useRealtimeAttendance';
 import { dataCache } from '../utils/dataCache';
 import { normalizeDate, isToday as isTodayDate, getDaysDifference, getTodayAnchor } from '../utils/dateUtils';
 import EventCreationModal from '../components/EventCreationModal';
-import EventDetailsModal from '../components/EventDetailsModal';
+// EventDetailsModal replaced with EventDetailsScreen navigation
+// QR modals are now handled in EventDetailsScreen
 import CalendarSkeletonLoader from '../components/CalendarSkeletonLoader';
 import DateSelector from '../components/DateSelector';
 import EventsList from '../components/EventsList';
 
 const CalendarScreen = ({ navigation }) => {
+  const route = useRoute();
+  const supabase = useSupabase(); // Get supabase client at top level
   const insets = useSafeAreaInsets();
   const adjustedTabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
@@ -35,12 +41,14 @@ const CalendarScreen = ({ navigation }) => {
   const [currentDate, setCurrentDate] = useState(() => getTodayAnchor());
   const [showEventModal, setShowEventModal] = useState(false);
   const [modalPrefilledData, setModalPrefilledData] = useState({});
-  const [showEventDetailsModal, setShowEventDetailsModal] = useState(false);
-  const [selectedEvent, setSelectedEvent] = useState(null);
   const [dateScrollIndex, setDateScrollIndex] = useState(0);
+  // QR scan data to pass to EventDetailsScreen
+  const [qrScanData, setQrScanData] = useState(null);
   // Optimistic updates: track pending operations
   const [optimisticEvents, setOptimisticEvents] = useState([]);
   const [deletedEventIds, setDeletedEventIds] = useState(new Set());
+  // Attendance status map: eventId -> { status, checkedInAt }
+  const [attendanceStatusMap, setAttendanceStatusMap] = useState({});
 
   // Always use DAY view for the new design
   const CALENDAR_VIEW = 'day';
@@ -93,6 +101,133 @@ const CalendarScreen = ({ navigation }) => {
         return timeA - timeB;
       });
   }, [events, optimisticEvents, deletedEventIds, currentDate]);
+
+  // Get stable event IDs for dependency tracking (only team events)
+  const teamEventIds = useMemo(() => {
+    if (!dayEvents || dayEvents.length === 0) return '';
+    const teamEvents = dayEvents.filter(e => e.postTo === 'Team' || e.type === 'team');
+    if (teamEvents.length === 0) return '';
+    return teamEvents.map(e => e.id).sort().join(',');
+  }, [dayEvents]);
+
+  // Store latest team events in a ref to avoid dependency issues
+  const teamEventsRef = useRef([]);
+  useEffect(() => {
+    if (!dayEvents || dayEvents.length === 0) {
+      teamEventsRef.current = [];
+      return;
+    }
+    const teamEvents = dayEvents.filter(e => e.postTo === 'Team' || e.type === 'team');
+    teamEventsRef.current = teamEvents;
+  }, [dayEvents]);
+
+  // Fetch attendance status for all events in the current day
+  useEffect(() => {
+    // Skip if no team events
+    if (!teamEventIds || teamEventsRef.current.length === 0) {
+      setAttendanceStatusMap({});
+      return;
+    }
+
+    const fetchAttendanceStatus = async () => {
+      const teamEvents = teamEventsRef.current;
+      if (teamEvents.length === 0) {
+        setAttendanceStatusMap({});
+        return;
+      }
+
+      try {
+        // Filter out events with temporary IDs (optimistic updates)
+        // Temp IDs start with "temp-" and are not valid UUIDs
+        const validEvents = teamEvents.filter(event => {
+          const id = event.id;
+          // Check if it's a valid UUID format (not a temp ID)
+          return id && typeof id === 'string' && !id.startsWith('temp-') && 
+                 /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+        });
+
+        // Fetch attendance status for all valid events in parallel
+        const statusPromises = validEvents.map(async (event) => {
+          const status = await getUserAttendanceStatus(supabase, event.id);
+          return { eventId: event.id, ...status };
+        });
+
+        const statuses = await Promise.all(statusPromises);
+        
+        // Convert to map
+        const statusMap = {};
+        statuses.forEach(({ eventId, status, checkedInAt }) => {
+          statusMap[eventId] = { status, checkedInAt };
+        });
+
+        setAttendanceStatusMap(statusMap);
+      } catch (error) {
+        console.error('Error fetching attendance status:', error);
+        setAttendanceStatusMap({});
+      }
+    };
+
+    fetchAttendanceStatus();
+  }, [teamEventIds]); // Only depend on stable string ID
+
+  // Subscribe to real-time attendance changes for all team events
+  const teamEventIdsArray = useMemo(() => {
+    if (!teamEventsRef.current || teamEventsRef.current.length === 0) return [];
+    return teamEventsRef.current
+      .filter(event => {
+        const id = event.id;
+        return id && typeof id === 'string' && !id.startsWith('temp-') && 
+               /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+      })
+      .map(event => event.id);
+  }, [teamEventIds]);
+
+  useRealtimeAttendanceMultiple(teamEventIdsArray, teamEventIdsArray.length > 0);
+
+  // Refetch attendance status when real-time updates occur
+  // Listen to query cache updates to know when to refetch
+  useEffect(() => {
+    if (!teamEventIds || teamEventsRef.current.length === 0) return;
+
+    const fetchAttendanceStatus = async () => {
+      const teamEvents = teamEventsRef.current;
+      if (teamEvents.length === 0) return;
+
+      try {
+        const validEvents = teamEvents.filter(event => {
+          const id = event.id;
+          return id && typeof id === 'string' && !id.startsWith('temp-') && 
+                 /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+        });
+
+        const statusPromises = validEvents.map(async (event) => {
+          const status = await getUserAttendanceStatus(supabase, event.id);
+          return { eventId: event.id, ...status };
+        });
+
+        const statuses = await Promise.all(statusPromises);
+        
+        const statusMap = {};
+        statuses.forEach(({ eventId, status, checkedInAt }) => {
+          statusMap[eventId] = { status, checkedInAt };
+        });
+
+        setAttendanceStatusMap(statusMap);
+      } catch (error) {
+        console.error('Error refetching attendance status:', error);
+      }
+    };
+
+    // Subscribe to query cache to detect when attendance queries are invalidated
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (event?.query?.queryKey?.[0] === 'eventAttendance') {
+        // Refetch attendance status when any attendance query is updated
+        fetchAttendanceStatus();
+      }
+    });
+
+    return () => unsubscribe();
+  }, [teamEventIds, supabase, queryClient]);
 
   // Manual refresh handler
   const handleManualRefresh = useCallback(() => {
@@ -173,110 +308,118 @@ const CalendarScreen = ({ navigation }) => {
   // Optimistic create event with immediate UI update
   const handleCreateEvent = useCallback(async (eventData) => {
     console.log('🟢 CalendarScreen: handleCreateEvent called with:', eventData);
-      
-      const { data: { user } } = await supabase.auth.getUser();
+    
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError) {
+        console.error('❌ Error getting user:', userError);
+        Alert.alert('Error', 'Failed to verify authentication.');
+        return;
+      }
       if (!user) {
+        console.error('❌ No user found');
         Alert.alert('Error', 'You must be logged in to create events.');
         return;
       }
+      console.log('✅ User authenticated:', user.id);
       
-    // Create optimistic event
-    const tempId = `temp-${Date.now()}`;
+      // Create optimistic event
+      const tempId = `temp-${Date.now()}`;
     
-    // Parse date - handle MM/DD/YYYY format
-    const dateParts = eventData.date.split('/');
-    const month = parseInt(dateParts[0]) - 1; // JS months are 0-indexed
-    const day = parseInt(dateParts[1]);
-    const year = parseInt(dateParts[2]);
-    
-    // Parse start time - use startTime or time field
-    const startTimeStr = eventData.startTime || eventData.time;
-    if (!startTimeStr) {
-      console.error('❌ No start time provided');
-      Alert.alert('Error', 'Start time is required');
-      return;
-    }
-    
-    const startTimeParts = startTimeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
-    if (!startTimeParts) {
-      console.error('❌ Invalid time format:', startTimeStr);
-      Alert.alert('Error', 'Invalid time format');
-      return;
-    }
-    
-    let startHour = parseInt(startTimeParts[1]);
-    const startMinute = parseInt(startTimeParts[2]);
-    const startPeriod = startTimeParts[3].toUpperCase();
-    
-    if (startPeriod === 'PM' && startHour !== 12) {
-      startHour += 12;
-    } else if (startPeriod === 'AM' && startHour === 12) {
-      startHour = 0;
-    }
-    
-    // 🔥 FIXED: Create dates in local timezone, then normalize date part to midnight
-    // This ensures the date part matches when filtering (which normalizes to midnight)
-    const startTime = new Date(year, month, day, startHour, startMinute);
-    // Normalize the date part to midnight (for consistent date comparison)
-    // But keep the time component for display
-    const normalizedStartTime = new Date(startTime);
-    normalizedStartTime.setHours(startHour, startMinute, 0, 0);
-    // The date part is already correct (year, month, day), we just set the time
-    
-    // Parse end time
-    const endTimeStr = eventData.endTime || eventData.startTime || eventData.time;
-    const endTimeParts = endTimeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
-    let endTime;
-    
-    if (endTimeParts) {
-      let endHour = parseInt(endTimeParts[1]);
-      const endMinute = parseInt(endTimeParts[2]);
-      const endPeriod = endTimeParts[3].toUpperCase();
+      // Parse date - handle MM/DD/YYYY format
+      const dateParts = eventData.date.split('/');
+      const month = parseInt(dateParts[0]) - 1; // JS months are 0-indexed
+      const day = parseInt(dateParts[1]);
+      const year = parseInt(dateParts[2]);
       
-      if (endPeriod === 'PM' && endHour !== 12) {
-        endHour += 12;
-      } else if (endPeriod === 'AM' && endHour === 12) {
-        endHour = 0;
+      // Parse start time - use startTime or time field
+      const startTimeStr = eventData.startTime || eventData.time;
+      if (!startTimeStr) {
+        console.error('❌ No start time provided');
+        Alert.alert('Error', 'Start time is required');
+        return;
       }
       
-      endTime = new Date(year, month, day, endHour, endMinute);
-      endTime.setHours(endHour, endMinute, 0, 0);
-    } else {
-      // Default to 1 hour after start
-      endTime = new Date(normalizedStartTime);
-      endTime.setHours(startHour + 1, startMinute, 0, 0);
-    }
+      const startTimeParts = startTimeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      if (!startTimeParts) {
+        console.error('❌ Invalid time format:', startTimeStr);
+        Alert.alert('Error', 'Invalid time format');
+        return;
+      }
+      
+      let startHour = parseInt(startTimeParts[1]);
+      const startMinute = parseInt(startTimeParts[2]);
+      const startPeriod = startTimeParts[3].toUpperCase();
+      
+      if (startPeriod === 'PM' && startHour !== 12) {
+        startHour += 12;
+      } else if (startPeriod === 'AM' && startHour === 12) {
+        startHour = 0;
+      }
+      
+      // 🔥 FIXED: Create dates in local timezone, then normalize date part to midnight
+      // This ensures the date part matches when filtering (which normalizes to midnight)
+      const startTime = new Date(year, month, day, startHour, startMinute);
+      // Normalize the date part to midnight (for consistent date comparison)
+      // But keep the time component for display
+      const normalizedStartTime = new Date(startTime);
+      normalizedStartTime.setHours(startHour, startMinute, 0, 0);
+      // The date part is already correct (year, month, day), we just set the time
+      
+      // Parse end time
+      const endTimeStr = eventData.endTime || eventData.startTime || eventData.time;
+      const endTimeParts = endTimeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      let endTime;
+      
+      if (endTimeParts) {
+        let endHour = parseInt(endTimeParts[1]);
+        const endMinute = parseInt(endTimeParts[2]);
+        const endPeriod = endTimeParts[3].toUpperCase();
+        
+        if (endPeriod === 'PM' && endHour !== 12) {
+          endHour += 12;
+        } else if (endPeriod === 'AM' && endHour === 12) {
+          endHour = 0;
+        }
+        
+        endTime = new Date(year, month, day, endHour, endMinute);
+        endTime.setHours(endHour, endMinute, 0, 0);
+      } else {
+        // Default to 1 hour after start
+        endTime = new Date(normalizedStartTime);
+        endTime.setHours(startHour + 1, startMinute, 0, 0);
+      }
 
-    const optimisticEvent = {
-      id: tempId,
-      title: eventData.title,
-      eventType: eventData.eventType,
-      startTime: normalizedStartTime.toISOString(), // 🔥 FIXED: Use properly formatted date
-      endTime: endTime.toISOString(),
-      location: eventData.location || '',
-      notes: eventData.notes || '',
-      color: eventData.color || teamColors.primary,
-      type: eventData.postTo === 'Personal' ? 'personal' : 'team',
-      isOptimistic: true,
-    };
+      const optimisticEvent = {
+        id: tempId,
+        title: eventData.title,
+        eventType: eventData.eventType,
+        startTime: normalizedStartTime.toISOString(), // 🔥 FIXED: Use properly formatted date
+        endTime: endTime.toISOString(),
+        location: eventData.location || '',
+        notes: eventData.notes || '',
+        color: eventData.color || teamColors.primary,
+        type: eventData.postTo === 'Personal' ? 'personal' : 'team',
+        isOptimistic: true,
+      };
 
-    // Optimistically add to UI
-    setOptimisticEvents(prev => [...prev, optimisticEvent]);
-    setShowEventModal(false);
+      // Optimistically add to UI
+      setOptimisticEvents(prev => [...prev, optimisticEvent]);
+      setShowEventModal(false);
+      console.log('✅ Optimistic event added to UI');
 
-    try {
       console.log('📝 Creating event with data:', eventData);
       const formattedData = formatEventData(eventData, teamId, user.id);
       console.log('📦 Formatted event data:', formattedData);
       
-      const { data, error } = await createEvent(formattedData);
+      const { data, error } = await createEvent(supabase, formattedData);
       
       if (error) {
         console.error('❌ Error from createEvent:', error);
         // Remove optimistic event on error
         setOptimisticEvents(prev => prev.filter(e => e.id !== tempId));
         Alert.alert('Error', `Failed to create event: ${error.message || 'Unknown error'}`);
-        return;
+        throw error; // Re-throw so EventCreationModal can handle it
       }
       
       console.log('✅ Event created successfully:', data);
@@ -296,34 +439,43 @@ const CalendarScreen = ({ navigation }) => {
       
       console.log('✅ Event creation complete and caches invalidated');
       
+      // Return result so EventCreationModal can upload attachments
+      return { data, error: null };
+      
     } catch (error) {
       console.error('❌ Exception creating event:', error);
+      console.error('❌ Error stack:', error.stack);
       setOptimisticEvents(prev => prev.filter(e => e.id !== tempId));
       Alert.alert('Error', `Failed to create event: ${error.message || 'Unknown error'}`);
     }
-  }, [teamId, teamColors, refetch, invalidateEventCaches]);
+  }, [teamId, teamColors, refetch, invalidateEventCaches, supabase]);
 
   const handleEventPress = (event) => {
-    // Format event for details modal
-    // Ensure we have valid date objects
+    // Convert Date objects to ISO strings for navigation params (React Navigation requires serializable values)
     const startTimeDate = event.startTime ? new Date(event.startTime) : null;
     const endTimeDate = event.endTime ? new Date(event.endTime) : null;
     
-    const formattedEvent = {
+    const serializableEvent = {
       ...event,
       eventType: event.eventType || event.type,
-      startTime: startTimeDate && !isNaN(startTimeDate.getTime()) ? formatTime(startTimeDate) : '',
-      endTime: endTimeDate && !isNaN(endTimeDate.getTime()) ? formatTime(endTimeDate) : '',
+      // Convert Date objects to ISO strings for navigation
+      startTime: startTimeDate && !isNaN(startTimeDate.getTime()) ? startTimeDate.toISOString() : null,
+      endTime: endTimeDate && !isNaN(endTimeDate.getTime()) ? endTimeDate.toISOString() : null,
       date: startTimeDate && !isNaN(startTimeDate.getTime()) 
-        ? startTimeDate.toLocaleDateString() 
-        : new Date().toLocaleDateString(),
+        ? startTimeDate.toISOString()
+        : null,
       postTo: event.type === 'personal' ? 'Personal' : 'Team'
     };
-    setSelectedEvent(formattedEvent);
-    setShowEventDetailsModal(true);
+    
+    // Navigate to EventDetailsScreen (no functions in params - use navigation listeners instead)
+    navigation.navigate('EventDetails', {
+      event: serializableEvent,
+      teamId,
+      qrScanData,
+    });
   };
 
-  const handleEditEvent = (event) => {
+  const handleEditEvent = useCallback((event) => {
     // Handle both Date objects and already-formatted strings
     let startTimeValue = event.startTime;
     let endTimeValue = event.endTime;
@@ -351,10 +503,24 @@ const CalendarScreen = ({ navigation }) => {
       postTo: event.postTo || 'Team'
     });
     setShowEventModal(true);
-  };
+  }, [formatTime]);
+
+  // Handle edit action from EventDetailsScreen
+  useFocusEffect(
+    useCallback(() => {
+      const params = route.params;
+      if (params?.action === 'edit' && params?.event) {
+        // Clear params to prevent re-triggering
+        navigation.setParams({ action: undefined, event: undefined });
+        // Handle edit
+        handleEditEvent(params.event);
+      }
+    }, [route.params, navigation, handleEditEvent])
+  );
 
   // Optimistic delete event
   const handleDeleteEvent = useCallback(async (event) => {
+    // Show confirmation alert (business logic in parent)
       Alert.alert(
         'Delete Event',
         `Are you sure you want to delete "${event.title}"?`,
@@ -371,10 +537,9 @@ const CalendarScreen = ({ navigation }) => {
             
             // Optimistically remove from UI
             setDeletedEventIds(prev => new Set([...prev, eventId]));
-            setShowEventDetailsModal(false);
             
             try {
-              const { success, error } = await deleteEvent(eventId);
+              const { success, error } = await deleteEvent(supabase, eventId);
               
               if (error) {
                 // Revert optimistic delete on error
@@ -498,6 +663,7 @@ const CalendarScreen = ({ navigation }) => {
             setShowEventModal(true);
           }}
           teamColors={teamColors}
+          attendanceStatusMap={attendanceStatusMap}
         />
       </ScrollView>
 
@@ -509,19 +675,11 @@ const CalendarScreen = ({ navigation }) => {
           onCreateEvent={handleCreateEvent}
           prefilledData={modalPrefilledData}
           teamColors={teamColors}
+          teamId={teamId}
         />
       )}
 
-      {/* Event Details Modal */}
-      {showEventDetailsModal && (
-        <EventDetailsModal
-          visible={showEventDetailsModal}
-          onClose={() => setShowEventDetailsModal(false)}
-          onEdit={handleEditEvent}
-          onDelete={handleDeleteEvent}
-          event={selectedEvent}
-        />
-      )}
+      {/* QR modals are now handled in EventDetailsScreen */}
     </View>
   );
 };

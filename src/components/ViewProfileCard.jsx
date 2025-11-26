@@ -17,7 +17,7 @@ const { width } = Dimensions.get('window');
 const isTablet = width >= 768;
 
 const ViewProfileCard = ({ 
-  profile, 
+  profile,
   userRole,
   onPhotoPress,
   teamColor,

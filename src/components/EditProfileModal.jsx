@@ -16,6 +16,7 @@ import { COLORS } from '../constants/colors';
 import { TYPOGRAPHY } from '../constants/typography';
 import AvatarPicker from './AvatarPicker';
 import { uploadAvatar, upsertUserProfile, upsertTeamMemberProfile } from '../api/profiles';
+import { useSupabase } from '../providers/SupabaseProvider';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
@@ -30,6 +31,7 @@ const EditProfileModal = ({
   isAdmin = false,
   onProfileUpdated 
 }) => {
+  const supabase = useSupabase();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({});
@@ -82,7 +84,7 @@ const EditProfileModal = ({
       let avatarUrl = profile?.user_profiles?.avatar_url;
       if (avatarFile) {
         console.log('Uploading avatar...');
-        const { data: uploadData, error: uploadError } = await uploadAvatar(userId, avatarFile);
+        const { data: uploadData, error: uploadError } = await uploadAvatar(supabase, userId, avatarFile);
         if (uploadError) {
           console.error('Avatar upload error:', uploadError);
           throw uploadError;
@@ -100,7 +102,7 @@ const EditProfileModal = ({
       };
 
       console.log('Saving user profile with avatar URL:', avatarUrl);
-      const { error: userError } = await upsertUserProfile(userProfileData);
+      const { error: userError } = await upsertUserProfile(supabase, userProfileData);
       if (userError) throw userError;
       console.log('User profile saved successfully');
 
@@ -125,7 +127,7 @@ const EditProfileModal = ({
         is_complete: checkProfileCompletion(),
       };
 
-      const { error: teamError } = await upsertTeamMemberProfile(teamId, userId, teamProfileData);
+      const { error: teamError } = await upsertTeamMemberProfile(supabase, teamId, userId, teamProfileData);
       if (teamError) throw teamError;
 
       Alert.alert('Success', 'Profile updated successfully!');

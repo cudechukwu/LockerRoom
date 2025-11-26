@@ -29,7 +29,7 @@ import ImagePickerModal from '../components/ImagePickerModal';
 import { dataCache, CACHE_KEYS } from '../utils/dataCache';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../hooks/queryKeys';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -48,6 +48,7 @@ const normalizeConversationType = (apiType) => {
 };
 
 const ConversationInfoScreen = ({ navigation, route }) => {
+  const supabase = useSupabase();
   const { conversationId, conversationType: routeType = 'channel', channelName, teamId } = route.params;
   const [conversation, setConversation] = useState(null);
   const [members, setMembers] = useState([]);
@@ -149,7 +150,7 @@ const ConversationInfoScreen = ({ navigation, route }) => {
         setLoading(true);
       }
       
-      const { data: channelData, error } = await getChannel(conversationId);
+      const { data: channelData, error } = await getChannel(supabase, conversationId);
       
       if (error) throw error;
       
@@ -159,10 +160,10 @@ const ConversationInfoScreen = ({ navigation, route }) => {
         const normalizedType = normalizeConversationType(apiType);
         
         // Check if channel is muted
-        const muted = await isChannelMuted(conversationId);
+        const muted = await isChannelMuted(supabase, conversationId);
         
         // Check if current user is admin
-        const admin = await isChannelAdmin(conversationId);
+        const admin = await isChannelAdmin(supabase, conversationId);
         setIsCurrentUserAdmin(admin);
         
         // Store creator ID for badge display
@@ -219,7 +220,7 @@ const ConversationInfoScreen = ({ navigation, route }) => {
         setMembersLoading(true);
       }
       
-      const { data: membersData, error } = await getChannelMembers(conversationId, teamId);
+      const { data: membersData, error } = await getChannelMembers(supabase, conversationId, teamId);
       
       if (error) throw error;
       
@@ -251,7 +252,7 @@ const ConversationInfoScreen = ({ navigation, route }) => {
           setTeamLoading(false);
           
           // Silent refresh in background
-          const teamData = await getTeamInfo(teamId);
+          const teamData = await getTeamInfo(supabase, teamId);
           dataCache.set(CACHE_KEYS.TEAM_INFO(teamId), teamData, 5 * 60 * 1000);
           setTeamInfo(teamData);
           return;
@@ -276,7 +277,7 @@ const ConversationInfoScreen = ({ navigation, route }) => {
 
   const handleUpdateMemberRole = async (memberId, newRole) => {
     try {
-      const { error } = await updateChannelMemberRole(conversationId, memberId, newRole);
+      const { error } = await updateChannelMemberRole(supabase, conversationId, memberId, newRole);
       if (error) throw error;
       
       // Refresh members list
@@ -307,7 +308,7 @@ const ConversationInfoScreen = ({ navigation, route }) => {
       setOptimisticChannelImage(imageAsset.uri);
 
       // Upload channel image
-      const { data: uploadData, error: uploadError } = await uploadChannelImage(conversationId, file);
+      const { data: uploadData, error: uploadError } = await uploadChannelImage(supabase, conversationId, file);
       if (uploadError) throw uploadError;
 
       // OPTIMISTIC UPDATE: Update to the uploaded image URL with cache bust
@@ -315,7 +316,7 @@ const ConversationInfoScreen = ({ navigation, route }) => {
       setOptimisticChannelImage(newImageUrl);
 
       // Update channel with new image URL
-      const { error: updateError } = await updateChannelImage(conversationId, uploadData.url);
+      const { error: updateError } = await updateChannelImage(supabase, conversationId, uploadData.url);
       if (updateError) throw updateError;
 
       // INVALIDATE CACHE: Clear old cached data
@@ -360,7 +361,7 @@ const ConversationInfoScreen = ({ navigation, route }) => {
     try {
       if (duration === 'Unmute') {
         // Unmute the channel
-        await unmuteChannel(conversationId);
+        await unmuteChannel(supabase, conversationId);
         setIsMuted(false);
         Alert.alert('Unmuted', 'Notifications have been restored');
       } else {
@@ -373,7 +374,7 @@ const ConversationInfoScreen = ({ navigation, route }) => {
         const durationHours = durationMap[duration] || 24;
         
         // Mute the channel
-        await muteChannel(conversationId, durationHours);
+        await muteChannel(supabase, conversationId, durationHours);
         setIsMuted(true);
     Alert.alert('Muted', `Notifications muted for ${duration}`);
       }
@@ -811,7 +812,7 @@ const ConversationInfoScreen = ({ navigation, route }) => {
           onDelete={async () => {
             // Handle channel image deletion
             try {
-              const { error } = await updateChannelImage(conversationId, null);
+              const { error } = await updateChannelImage(supabase, conversationId, null);
               if (error) throw error;
               
               // Invalidate cache

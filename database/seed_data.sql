@@ -15,11 +15,11 @@ DO $$
 DECLARE
     -- Real user IDs from your auth.users table
     admin_user_id UUID := 'e0b53182-d8ca-491e-9a8c-f24db1ebd8df';
-    coach_user_id UUID := '8d99f216-1454-4500-9652-f87922774f5c';
+    coach_user_id UUID := '<USER_ID>';
     trainer_user_id UUID := 'e0b53182-d8ca-491e-9a8c-f24db1ebd8df'; -- Using same as admin for now
-    captain_user_id UUID := '8d99f216-1454-4500-9652-f87922774f5c'; -- Using same as coach for now
+    captain_user_id UUID := '<USER_ID>'; -- Using same as coach for now
     player1_user_id UUID := 'e0b53182-d8ca-491e-9a8c-f24db1ebd8df'; -- Using same as admin for now
-    player2_user_id UUID := '8d99f216-1454-4500-9652-f87922774f5c'; -- Using same as coach for now
+    player2_user_id UUID := '<USER_ID>'; -- Using same as coach for now
     player3_user_id UUID := 'e0b53182-d8ca-491e-9a8c-f24db1ebd8df'; -- Using same as admin for now
     
     -- Team and channel IDs

@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, FlatList, Image, TouchableOpacity, Dimensions, 
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSharedMedia } from '../api/chat';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { getFontSize, getFontWeight } from '../constants/fonts';
 import ImageViewer from './ImageViewer';
 
@@ -12,6 +13,7 @@ const ITEM_SIZE = (SCREEN_WIDTH - 80) / 3; // 3 columns with padding
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 const SharedMediaSection = ({ channelId, conversationType = 'channel' }) => {
+  const supabase = useSupabase();
   const [media, setMedia] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showImageViewer, setShowImageViewer] = useState(false);
@@ -55,7 +57,7 @@ const SharedMediaSection = ({ channelId, conversationType = 'channel' }) => {
 
   const refreshInBackground = async (cacheKey) => {
     try {
-      const { data, error } = await getSharedMedia(channelId, { limit: 6 });
+      const { data, error } = await getSharedMedia(supabase, channelId, { limit: 6 });
       if (error) throw error;
       
       const mediaData = data || [];

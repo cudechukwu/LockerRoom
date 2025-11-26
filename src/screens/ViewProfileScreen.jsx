@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { COLORS } from '../constants/colors';
 import { TYPOGRAPHY } from '../constants/typography';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 import ViewProfileCard from '../components/ViewProfileCard';
 import ProfileSkeletonLoader from '../components/ProfileSkeletonLoader';
 import ImageViewer from '../components/ImageViewer';
@@ -34,6 +34,7 @@ import { getTeamInfo } from '../api/teamMembers';
 const { width, height } = Dimensions.get('window');
 
 const ViewProfileScreen = ({ navigation, route }) => {
+  const supabase = useSupabase();
   const { userId, teamId: routeTeamId, userName } = route.params || {};
   
   // Get current user's team for DM creation
@@ -65,7 +66,7 @@ const ViewProfileScreen = ({ navigation, route }) => {
           if (!currentTeamId || !userId) {
             throw new Error('Missing teamId or userId');
           }
-          const { data, error: profileError } = await getTeamMemberProfile(currentTeamId, userId);
+          const { data, error: profileError } = await getTeamMemberProfile(supabase, currentTeamId, userId);
           if (profileError) throw profileError;
           return data;
         },
@@ -261,6 +262,7 @@ const ViewProfileScreen = ({ navigation, route }) => {
       
       // Find or create DM
       const { data: dmChannel, error: dmError } = await findOrCreateDirectMessage(
+        supabase,
         currentTeamId,
         userId,
         displayName

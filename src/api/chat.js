@@ -1,7 +1,5 @@
 // Chat API Endpoints
 // Supabase-based chat system with real-time messaging
-
-import { supabase } from '../lib/supabase.js';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import { decode as atob } from 'base-64';
@@ -209,22 +207,23 @@ export async function getDirectMessages(teamId) {
  * @param {string} channelId - Channel ID
  * @returns {Promise<Object>} Channel details
  */
-export async function getChannel(channelId) {
+export async function getChannel(supabaseClient, channelId) {
   try {
-    const { data, error } = await supabase
+    const { data: { user } } = await supabaseClient.auth.getUser();
+    const { data, error } = await supabaseClient
       .from('channels')
       .select(`
         *,
         channel_members!inner(user_id)
       `)
       .eq('id', channelId)
-      .eq('channel_members.user_id', (await supabase.auth.getUser()).data.user?.id)
+      .eq('channel_members.user_id', user?.id)
       .single();
 
     if (error) throw error;
     
     // Get member count
-    const { count } = await supabase
+    const { count } = await supabaseClient
       .from('channel_members')
       .select('*', { count: 'exact', head: true })
       .eq('channel_id', channelId);
@@ -244,18 +243,19 @@ export async function getChannel(channelId) {
 
 /**
  * Create a new channel
+ * @param {Object} supabaseClient - Supabase client
  * @param {Object} channelData - Channel data
  * @returns {Promise<Object>} Created channel
  */
-export async function createChannel(channelData) {
+export async function createChannel(supabaseClient, channelData) {
   try {
-    const user = (await supabase.auth.getUser()).data.user;
+    const { data: { user } } = await supabaseClient.auth.getUser();
     if (!user) throw new Error('User not authenticated');
 
     // Do not insert non-column helper fields like other_user_id into channels
     const { other_user_id, ...insertData } = channelData || {};
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('channels')
       .insert({
         ...insertData,
@@ -267,7 +267,7 @@ export async function createChannel(channelData) {
     if (error) throw error;
 
     // Add creator as channel member
-    await supabase
+    await supabaseClient
       .from('channel_members')
       .insert({
         channel_id: data.id,
@@ -277,7 +277,7 @@ export async function createChannel(channelData) {
     
     // ✅ For DMs: Also add the other user as a member
     if (insertData.type === 'dm' && other_user_id) {
-      await supabase
+      await supabaseClient
         .from('channel_members')
         .insert({
           channel_id: data.id,
@@ -300,13 +300,13 @@ export async function createChannel(channelData) {
  * @param {string} otherUserName - Fallback name when creating
  * @returns {Promise<{data: any, error: any}>}
  */
-export async function findOrCreateDirectMessage(teamId, otherUserId, otherUserName = 'Direct Message') {
+export async function findOrCreateDirectMessage(supabaseClient, teamId, otherUserId, otherUserName = 'Direct Message') {
   try {
-    const currentUser = (await supabase.auth.getUser()).data.user;
+    const { data: { user: currentUser } } = await supabaseClient.auth.getUser();
     if (!currentUser) throw new Error('User not authenticated');
 
     // Preferred: atomic RPC to avoid race conditions
-    const { data: rpcChannel, error: rpcError } = await supabase.rpc(
+    const { data: rpcChannel, error: rpcError } = await supabaseClient.rpc(
       'get_or_create_dm',
       {
         p_team_id: teamId,
@@ -323,7 +323,7 @@ export async function findOrCreateDirectMessage(teamId, otherUserId, otherUserNa
     }
 
     // Fallback (non-atomic) client-side check
-    const { data: candidateChannels, error: findError } = await supabase
+    const { data: candidateChannels, error: findError } = await supabaseClient
       .from('channels')
       .select(`
         id,
@@ -344,7 +344,7 @@ export async function findOrCreateDirectMessage(teamId, otherUserId, otherUserNa
 
     if (existing) return { data: existing, error: null };
 
-    const { data: created, error: createError } = await createChannel({
+    const { data: created, error: createError } = await createChannel(supabaseClient, {
       team_id: teamId,
       name: otherUserName,
       description: `Direct message with ${otherUserName}`,
@@ -367,10 +367,10 @@ export async function findOrCreateDirectMessage(teamId, otherUserId, otherUserNa
  * @param {string} teamId - Team ID (optional, for fetching team member data)
  * @returns {Promise<Array>} Array of channel members with profile info
  */
-export async function getChannelMembers(channelId, teamId = null) {
+export async function getChannelMembers(supabaseClient, channelId, teamId = null) {
   try {
     // Step 1: Get channel members (including their channel role)
-    const { data: members, error: membersError } = await supabase
+    const { data: members, error: membersError } = await supabaseClient
       .from('channel_members')
       .select('user_id, role')
       .eq('channel_id', channelId);
@@ -385,7 +385,7 @@ export async function getChannelMembers(channelId, teamId = null) {
     const userIds = members.map(m => m.user_id);
     
     // Step 3: Get user profiles
-    const { data: userProfiles, error: profilesError } = await supabase
+    const { data: userProfiles, error: profilesError } = await supabaseClient
       .from('user_profiles')
       .select('user_id, display_name, avatar_url, bio')
       .in('user_id', userIds);
@@ -400,7 +400,7 @@ export async function getChannelMembers(channelId, teamId = null) {
     let teamMemberProfiles = null;
     
     if (teamId) {
-      const { data: teamMembersData, error: teamMembersError } = await supabase
+      const { data: teamMembersData, error: teamMembersError } = await supabaseClient
         .from('team_members')
         .select('user_id, role')
         .eq('team_id', teamId)
@@ -413,7 +413,7 @@ export async function getChannelMembers(channelId, teamId = null) {
       }
       
       // Get team member profiles for position info
-      const { data: teamMemberProfilesData, error: teamProfilesError } = await supabase
+      const { data: teamMemberProfilesData, error: teamProfilesError } = await supabaseClient
         .from('team_member_profiles')
         .select('user_id, position')
         .eq('team_id', teamId)
@@ -515,17 +515,17 @@ const normalizeMessages = (messages = [], currentUserId) =>
  * @param {Object} options - Pagination options
  * @returns {Promise<Object>} Messages and pagination info
  */
-export async function getMessages(channelId, options = {}) {
+export async function getMessages(supabaseClient, channelId, options = {}) {
   try {
     const { limit = 50, after } = options;
     
     // Note: Tombstone filtering is temporarily disabled to simplify
     // The Supabase query builder has issues with complex NOT IN filters
     
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await supabaseClient.auth.getUser();
     const currentUserId = user?.id;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('messages')
       .select(MESSAGE_SELECT_FIELDS)
       .eq('channel_id', channelId)
@@ -603,9 +603,9 @@ export async function getThreadMessages(parentMessageId) {
  * @param {Array} attachments - Array of attachment objects with { uri, type, name }
  * @returns {Promise<Object>} Created message
  */
-export async function sendMessage(channelId, messageData, attachments = []) {
+export async function sendMessage(supabaseClient, channelId, messageData, attachments = []) {
   try {
-    const user = (await supabase.auth.getUser()).data.user;
+    const { data: { user } } = await supabaseClient.auth.getUser();
     if (!user) throw new Error('User not authenticated');
 
     // Create message first
@@ -623,7 +623,7 @@ export async function sendMessage(channelId, messageData, attachments = []) {
       isReply: !!parentMessageId,
     });
     
-    const { data: rpcData, error: rpcError } = await supabase.rpc(
+    const { data: rpcData, error: rpcError } = await supabaseClient.rpc(
       'send_channel_message',
       {
         p_channel_id: channelId,
@@ -665,7 +665,7 @@ export async function sendMessage(channelId, messageData, attachments = []) {
 
             // Upload ArrayBuffer (React Native compatible)
             console.log('⬆️ Uploading to Supabase Storage...');
-            const { data: uploadData, error: uploadError } = await supabase.storage
+            const { data: uploadData, error: uploadError } = await supabaseClient.storage
               .from('message-attachments')
               .upload(filePath, arrayBuffer, {
                 contentType: 'image/jpeg',
@@ -679,7 +679,7 @@ export async function sendMessage(channelId, messageData, attachments = []) {
             }
 
             // Get public URL
-            const { data: urlData } = supabase.storage
+            const { data: urlData } = supabaseClient.storage
               .from('message-attachments')
               .getPublicUrl(filePath);
 
@@ -691,7 +691,7 @@ export async function sendMessage(channelId, messageData, attachments = []) {
             const fileSize = arrayBuffer.byteLength;
 
             // Create attachment record in database
-            const { data: attachmentRecord, error: attachmentError } = await supabase
+            const { data: attachmentRecord, error: attachmentError } = await supabaseClient
               .from('message_attachments')
               .insert({
                 message_id: message.id,
@@ -1000,13 +1000,13 @@ export async function removeReaction(messageId, emoji) {
  * @param {string} messageId - Message ID
  * @returns {Promise<Object>} Read receipt result
  */
-export async function markMessageAsRead(messageId) {
+export async function markMessageAsRead(supabaseClient, messageId) {
   try {
-    const user = (await supabase.auth.getUser()).data.user;
+    const { data: { user } } = await supabaseClient.auth.getUser();
     if (!user) throw new Error('User not authenticated');
 
     // Use upsert for idempotent read marking
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('message_reads')
       .upsert(
         { 
@@ -1117,16 +1117,16 @@ export async function getLatestMessage(channelId) {
  * @param {number} durationHours - Duration in hours (0 = until unmuted)
  * @returns {Promise<Object>} Mute result
  */
-export async function muteChannel(channelId, durationHours = 24) {
+export async function muteChannel(supabaseClient, channelId, durationHours = 24) {
   try {
-    const user = (await supabase.auth.getUser()).data.user;
+    const { data: { user } } = await supabaseClient.auth.getUser();
     if (!user) throw new Error('User not authenticated');
 
     const untilTs = durationHours === 0 
       ? new Date('2099-12-31').toISOString() // Far future for "until unmuted"
       : new Date(Date.now() + durationHours * 60 * 60 * 1000).toISOString();
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('mutes')
       .upsert({
         user_id: user.id,
@@ -1150,7 +1150,7 @@ export async function muteChannel(channelId, durationHours = 24) {
  * @param {Object} file - File object with uri, name, type
  * @returns {Promise<Object>} Upload result with URL
  */
-export async function uploadChannelImage(channelId, file) {
+export async function uploadChannelImage(supabaseClient, channelId, file) {
   try {
     // Create UNIQUE file path: channel-images/{channelId}/{timestamp}_{filename}
     const fileExt = file.name.split('.').pop();
@@ -1177,7 +1177,7 @@ export async function uploadChannelImage(channelId, file) {
     console.log('Uploading binary data to Supabase Storage...');
     
     // Upload to Supabase Storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    const { data: uploadData, error: uploadError } = await supabaseClient.storage
       .from('channel-images')
       .upload(filePath, byteArray, {
         cacheControl: '3600',
@@ -1190,7 +1190,7 @@ export async function uploadChannelImage(channelId, file) {
     console.log('Upload successful:', uploadData);
 
     // Get public URL
-    const { data: urlData } = supabase.storage
+    const { data: urlData } = supabaseClient.storage
       .from('channel-images')
       .getPublicUrl(filePath);
 
@@ -1216,9 +1216,9 @@ export async function uploadChannelImage(channelId, file) {
  * @param {string} imageUrl - New image URL
  * @returns {Promise<Object>} Update result
  */
-export async function updateChannelImage(channelId, imageUrl) {
+export async function updateChannelImage(supabaseClient, channelId, imageUrl) {
   try {
-    const { error } = await supabase
+    const { error } = await supabaseClient
       .from('channels')
       .update({ image_url: imageUrl })
       .eq('id', channelId);
@@ -1236,12 +1236,12 @@ export async function updateChannelImage(channelId, imageUrl) {
  * @param {string} channelId - Channel ID
  * @returns {Promise<boolean>} True if user is admin
  */
-export async function isChannelAdmin(channelId) {
+export async function isChannelAdmin(supabaseClient, channelId) {
   try {
-    const user = (await supabase.auth.getUser()).data.user;
+    const { data: { user } } = await supabaseClient.auth.getUser();
     if (!user) return false;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('channel_members')
       .select('role')
       .eq('channel_id', channelId)
@@ -1263,13 +1263,13 @@ export async function isChannelAdmin(channelId) {
  * @param {string} newRole - New role ('admin', 'moderator', 'member')
  * @returns {Promise<Object>} Update result
  */
-export async function updateChannelMemberRole(channelId, userId, newRole) {
+export async function updateChannelMemberRole(supabaseClient, channelId, userId, newRole) {
   try {
-    const user = (await supabase.auth.getUser()).data.user;
+    const { data: { user } } = await supabaseClient.auth.getUser();
     if (!user) throw new Error('User not authenticated');
 
     // Verify current user is admin
-    const { data: memberData, error: memberError } = await supabase
+    const { data: memberData, error: memberError } = await supabaseClient
       .from('channel_members')
       .select('role')
       .eq('channel_id', channelId)
@@ -1282,7 +1282,7 @@ export async function updateChannelMemberRole(channelId, userId, newRole) {
     }
 
     // Update the member's role
-    const { error: updateError } = await supabase
+    const { error: updateError } = await supabaseClient
       .from('channel_members')
       .update({ role: newRole })
       .eq('channel_id', channelId)
@@ -1301,12 +1301,12 @@ export async function updateChannelMemberRole(channelId, userId, newRole) {
  * @param {string} channelId - Channel ID
  * @returns {Promise<boolean>} True if muted
  */
-export async function isChannelMuted(channelId) {
+export async function isChannelMuted(supabaseClient, channelId) {
   try {
-    const user = (await supabase.auth.getUser()).data.user;
+    const { data: { user } } = await supabaseClient.auth.getUser();
     if (!user) return false;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('mutes')
       .select('until_ts')
       .eq('user_id', user.id)
@@ -1325,7 +1325,7 @@ export async function isChannelMuted(channelId) {
     }
     
     // Mute expired, delete it
-    await supabase
+    await supabaseClient
       .from('mutes')
       .delete()
       .eq('user_id', user.id)
@@ -1343,12 +1343,12 @@ export async function isChannelMuted(channelId) {
  * @param {string} channelId - Channel ID
  * @returns {Promise<Object>} Unmute result
  */
-export async function unmuteChannel(channelId) {
+export async function unmuteChannel(supabaseClient, channelId) {
   try {
-    const user = (await supabase.auth.getUser()).data.user;
+    const { data: { user } } = await supabaseClient.auth.getUser();
     if (!user) throw new Error('User not authenticated');
 
-    const { error } = await supabase
+    const { error } = await supabaseClient
       .from('mutes')
       .delete()
       .eq('user_id', user.id)
@@ -1372,12 +1372,12 @@ export async function unmuteChannel(channelId) {
  * @param {Object} options - Query options
  * @returns {Promise<Object>} Media files
  */
-export async function getSharedMedia(channelId, options = {}) {
+export async function getSharedMedia(supabaseClient, channelId, options = {}) {
   try {
     const { limit = 6, offset = 0 } = options;
 
     // First get messages with attachments in this channel
-    const { data: messages, error: messagesError } = await supabase
+    const { data: messages, error: messagesError } = await supabaseClient
       .from('messages')
       .select(`
         id,
@@ -1478,11 +1478,11 @@ export async function getSharedChannels(teamId, otherUserId) {
  * @param {Object} options - Query options
  * @returns {Promise<Object>} Pinned messages
  */
-export async function getPinnedMessages(channelId, options = {}) {
+export async function getPinnedMessages(supabaseClient, channelId, options = {}) {
   try {
     const { limit = 3 } = options;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('messages')
       .select(`
         id,
@@ -1514,7 +1514,7 @@ export async function getPinnedMessages(channelId, options = {}) {
  * @param {string} channelId - Channel ID
  * @returns {Promise<Object>} Conversation stats
  */
-export async function getConversationStats(channelId) {
+export async function getConversationStats(supabaseClient, channelId) {
   try {
     // Batch all queries in parallel for better performance
     const [
@@ -1522,16 +1522,16 @@ export async function getConversationStats(channelId) {
       { count: pinnedCount, error: pinnedError },
       { data: lastMessage, error: lastMessageError }
     ] = await Promise.all([
-      supabase
+      supabaseClient
         .from('messages')
         .select('*', { count: 'exact', head: true })
         .eq('channel_id', channelId),
-      supabase
+      supabaseClient
         .from('messages')
         .select('*', { count: 'exact', head: true })
         .eq('channel_id', channelId)
         .eq('is_pinned', true),
-      supabase
+      supabaseClient
         .from('messages')
         .select('created_at')
         .eq('channel_id', channelId)
@@ -1546,7 +1546,7 @@ export async function getConversationStats(channelId) {
 
     // Get media count (count messages with image attachments)
     let imageCount = 0;
-    const { data: messagesWithMedia, error: mediaError } = await supabase
+    const { data: messagesWithMedia, error: mediaError } = await supabaseClient
       .from('messages')
       .select('id, message_attachments(file_type)')
       .eq('channel_id', channelId);
@@ -1636,13 +1636,13 @@ export async function pinMessage(messageId) {
  * @param {string} channelId - Channel ID
  * @returns {Promise<Object>} All conversation overview data
  */
-export async function getConversationOverview(channelId) {
+export async function getConversationOverview(supabaseClient, channelId) {
   try {
     // Fetch all data in parallel
     const [stats, media, pinned] = await Promise.all([
-      getConversationStats(channelId),
-      getSharedMedia(channelId, { limit: 6 }),
-      getPinnedMessages(channelId, { limit: 3 })
+      getConversationStats(supabaseClient, channelId),
+      getSharedMedia(supabaseClient, channelId, { limit: 6 }),
+      getPinnedMessages(supabaseClient, channelId, { limit: 3 })
     ]);
 
     return {
@@ -1676,8 +1676,8 @@ export async function getConversationOverview(channelId) {
  * @param {Function} callback - Callback function for new messages/attachments
  * @returns {Object} Subscription object
  */
-export function subscribeToMessages(channelId, callback) {
-  return supabase
+export function subscribeToMessages(supabaseClient, channelId, callback) {
+  return supabaseClient
     .channel(`messages:${channelId}`)
     .on('postgres_changes', {
       event: 'INSERT',
@@ -1732,8 +1732,8 @@ export function subscribeToMessages(channelId, callback) {
  * @param {Function} callback - Callback function for member changes
  * @returns {Object} Subscription object
  */
-export function subscribeToChannelMembers(channelId, callback) {
-  return supabase
+export function subscribeToChannelMembers(supabaseClient, channelId, callback) {
+  return supabaseClient
     .channel(`channel_members:${channelId}`)
     .on('postgres_changes', {
       event: '*',
@@ -1748,6 +1748,6 @@ export function subscribeToChannelMembers(channelId, callback) {
  * Unsubscribe from a channel
  * @param {Object} subscription - Subscription object
  */
-export function unsubscribe(subscription) {
-  return supabase.removeChannel(subscription);
+export function unsubscribe(supabaseClient, subscription) {
+  return supabaseClient.removeChannel(subscription);
 }

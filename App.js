@@ -6,6 +6,7 @@ import * as Linking from 'expo-linking';
 import * as Haptics from 'expo-haptics';
 import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { PortalProvider } from '@gorhom/portal';
 // Temporarily disable persistence to fix import issue
 // import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 // Temporarily disable persistence to fix import issue
@@ -32,12 +33,14 @@ import AnimatedPlaybookScreen from './src/screens/AnimatedPlaybookScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
 import StorageDataScreen from './src/screens/StorageDataScreen';
 import TeamManagementScreen from './src/screens/TeamManagementScreen';
+import AttendanceGroupsScreen from './src/screens/AttendanceGroupsScreen';
 import CalendarScreen from './src/screens/CalendarScreen';
+import EventDetailsScreen from './src/screens/EventDetailsScreen';
 import ViewProfileScreen from './src/screens/ViewProfileScreen';
 import IncomingCallScreen from './src/screens/IncomingCallScreen';
 import ActiveCallScreen from './src/screens/ActiveCallScreen';
 import GroupCallScreen from './src/screens/GroupCallScreen';
-import { supabase } from './src/lib/supabase';
+import { SupabaseProvider, useSupabase } from './src/providers/SupabaseProvider';
 import { COLORS } from './src/constants/colors';
 import { NotificationProvider } from './src/contexts/NotificationContext';
 import { AppBootstrapContext } from './src/contexts/AppBootstrapContext';
@@ -59,7 +62,10 @@ const queryClient = new QueryClient({
 
 const DISABLE_CALL_REALTIME = true; // TODO: flip back to false once Realtime infra is stable
 
-export default function App() {
+// AppContent: All logic that requires Supabase client
+// This component uses useSupabase() hook, so it must be inside SupabaseProvider
+function AppContent() {
+  const supabase = useSupabase(); // Get hydrated client from provider
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
@@ -938,10 +944,11 @@ export default function App() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-    <QueryClientProvider client={queryClient}>
-      <NotificationProvider>
-        <AppBootstrapContext.Provider value={bootstrapContextValue}>
-          <TeamContext.Provider value={teamContextValue}>
+      <PortalProvider>
+      <QueryClientProvider client={queryClient}>
+        <NotificationProvider>
+          <AppBootstrapContext.Provider value={bootstrapContextValue}>
+            <TeamContext.Provider value={teamContextValue}>
             <NavigationContainer
               key={navigatorKey}
               ref={navigationRef}
@@ -1063,8 +1070,28 @@ export default function App() {
             }}
           />
           <Stack.Screen 
+            name="AttendanceGroups" 
+            component={AttendanceGroupsScreen}
+            options={{
+              presentation: 'card',
+              gestureEnabled: true,
+              gestureDirection: 'horizontal',
+              headerShown: false,
+            }}
+          />
+          <Stack.Screen 
             name="Schedule" 
             component={CalendarScreen}
+            options={{
+              presentation: 'card',
+              gestureEnabled: true,
+              gestureDirection: 'horizontal',
+              headerShown: false,
+            }}
+          />
+          <Stack.Screen 
+            name="EventDetails" 
+            component={EventDetailsScreen}
             options={{
               presentation: 'card',
               gestureEnabled: true,
@@ -1114,10 +1141,20 @@ export default function App() {
           />
         </Stack.Navigator>
       </NavigationContainer>
-          </TeamContext.Provider>
-        </AppBootstrapContext.Provider>
-    </NotificationProvider>
-    </QueryClientProvider>
+            </TeamContext.Provider>
+          </AppBootstrapContext.Provider>
+        </NotificationProvider>
+      </QueryClientProvider>
+      </PortalProvider>
     </GestureHandlerRootView>
+  );
+}
+
+// Main App component: Wraps everything in SupabaseProvider
+export default function App() {
+  return (
+    <SupabaseProvider>
+      <AppContent />
+    </SupabaseProvider>
   );
 }

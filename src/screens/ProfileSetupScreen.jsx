@@ -16,7 +16,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
 import { getFontSize, getFontWeight } from '../constants/fonts';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { getUserProfile, upsertUserProfile } from '../api/profiles';
 import ImagePickerModal from '../components/ImagePickerModal';
 import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
@@ -29,6 +29,7 @@ const ROLE_OPTIONS = [
 ];
 
 const ProfileSetupScreen = ({ navigation }) => {
+  const supabase = useSupabase();
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showImagePicker, setShowImagePicker] = useState(false);
@@ -79,7 +80,7 @@ const ProfileSetupScreen = ({ navigation }) => {
 
         setUserId(user.id);
 
-        const { data: profileData, error: profileError } = await getUserProfile(user.id);
+        const { data: profileData, error: profileError } = await getUserProfile(supabase, user.id);
 
         if (profileError && profileError.code !== 'PGRST116') {
           throw profileError;
@@ -175,7 +176,7 @@ const ProfileSetupScreen = ({ navigation }) => {
         primary_position: formData.position.trim() ? formData.position.trim() : null,
       };
 
-      const { error } = await upsertUserProfile(payload);
+      const { error } = await upsertUserProfile(supabase, payload);
 
       if (error) {
         throw error;

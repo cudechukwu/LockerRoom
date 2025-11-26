@@ -2,7 +2,9 @@ import { useQueries, useQueryClient } from '@tanstack/react-query';
 import React, { useEffect, useMemo } from 'react';
 import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
 import { TeamContext } from '../contexts/TeamContext';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { queryKeys } from './queryKeys';
+import { useUserGroupsAndRole } from './useUserGroupsAndRole';
 import { 
   getEventsForMonth, 
   getEventsForWeek, 
@@ -84,16 +86,16 @@ const buildEventPayload = (eventsData = [], teamColors = {}) =>
     postTo: event.visibility === 'personal' ? 'Personal' : 'Team',
   }));
 
-const fetchEventsByView = async (teamId, currentView, currentDate) => {
-  if (!teamId || !currentDate) return [];
+const fetchEventsByView = async (supabase, teamId, currentView, currentDate) => {
+  if (!teamId || !currentDate || !supabase) return [];
 
   switch (currentView) {
     case CALENDAR_VIEWS.MONTH:
-      return (await safeFetch(getEventsForMonth, teamId, currentDate)) || [];
+      return (await safeFetch(getEventsForMonth, supabase, teamId, currentDate)) || [];
     case CALENDAR_VIEWS.WEEK: {
       const weekStart = new Date(currentDate);
       weekStart.setDate(currentDate.getDate() - currentDate.getDay());
-      return (await safeFetch(getEventsForWeek, teamId, weekStart)) || [];
+      return (await safeFetch(getEventsForWeek, supabase, teamId, weekStart)) || [];
     }
     case CALENDAR_VIEWS.DAY:
       // 🔥 FIXED: Fetch full year range (-365 to +365 days) to include past events
@@ -104,14 +106,14 @@ const fetchEventsByView = async (teamId, currentView, currentDate) => {
       const startDate = addDays(today, -365);
       const endDate = getEndOfDay(addDays(today, 365));
       
-      return (await safeFetch(getEventsInRange, teamId, startDate, endDate)) || [];
+      return (await safeFetch(getEventsInRange, supabase, teamId, startDate, endDate)) || [];
     default:
       return [];
   }
 };
 
-const fetchAndCacheEvents = async (teamId, currentView, currentDate, teamColors) => {
-  if (!teamId || !currentDate) return [];
+const fetchAndCacheEvents = async (supabase, teamId, currentView, currentDate, teamColors) => {
+  if (!teamId || !currentDate || !supabase) return [];
 
   // 🔥 FIXED: For DAY view, use stable cache key for full year range
   // This allows caching all events and reusing across day selections
@@ -126,13 +128,13 @@ const fetchAndCacheEvents = async (teamId, currentView, currentDate, teamColors)
     return cached;
   }
 
-  const eventsData = await fetchEventsByView(teamId, currentView, currentDate);
+  const eventsData = await fetchEventsByView(supabase, teamId, currentView, currentDate);
   const transformedEvents = buildEventPayload(eventsData, teamColors);
   await cacheSet(cacheKey, transformedEvents, CACHE_TTL.SHORT);
           return transformedEvents;
 };
 
-export function useTeamColors(teamId) {
+export function useTeamColors(supabase, teamId) {
   return useQueries({
     queries: [
       {
@@ -145,11 +147,11 @@ export function useTeamColors(teamId) {
             devLog('🎨 Using cached team colors');
             return cached;
           }
-          const colors = await safeFetch(getTeamColors, teamId);
+          const colors = await safeFetch(getTeamColors, supabase, teamId);
           await cacheSet(cacheKey, colors, CACHE_TTL.LONG);
           return colors;
         },
-        enabled: !!teamId,
+        enabled: !!teamId && !!supabase,
         staleTime: CACHE_TTL.MEDIUM,
         gcTime: CACHE_TTL.LONG,
         keepPreviousData: true,
@@ -165,7 +167,7 @@ const normalizeDateKey = (date) => {
   return normalized ? normalized.toISOString().split('T')[0] : null;
 };
 
-export function useCalendarEvents(teamId, currentView, currentDate, teamColors) {
+export function useCalendarEvents(supabase, teamId, currentView, currentDate, teamColors) {
   // 🔥 FIXED: For DAY view, use a stable cache key that doesn't change per day
   // This allows us to cache the full year range and reuse it across day selections
   // React Query requires queryKey to be an array
@@ -177,8 +179,8 @@ export function useCalendarEvents(teamId, currentView, currentDate, teamColors) 
     queries: [
       {
         queryKey: queryKey,
-        queryFn: () => fetchAndCacheEvents(teamId, currentView, currentDate, teamColors),
-        enabled: !!teamId && !!currentDate,
+        queryFn: () => fetchAndCacheEvents(supabase, teamId, currentView, currentDate, teamColors),
+        enabled: !!teamId && !!currentDate && !!supabase,
         staleTime: CACHE_TTL.SHORT,
         gcTime: CACHE_TTL.MEDIUM,
         keepPreviousData: true,
@@ -187,7 +189,7 @@ export function useCalendarEvents(teamId, currentView, currentDate, teamColors) 
   })[0];
 }
 
-export function useUpcomingEvents(teamId, teamColors) {
+export function useUpcomingEvents(supabase, teamId, teamColors) {
   return useQueries({
     queries: [
       {
@@ -201,7 +203,7 @@ export function useUpcomingEvents(teamId, teamColors) {
             return cached;
           }
 
-          const upcomingData = await safeFetch(getUpcomingEvents, teamId, 5);
+          const upcomingData = await safeFetch(getUpcomingEvents, supabase, teamId, 5);
           const upcomingEvents = (upcomingData || []).map((event) => ({
             id: event.id,
             title: event.title,
@@ -219,7 +221,7 @@ export function useUpcomingEvents(teamId, teamColors) {
           await cacheSet(cacheKey, upcomingEvents, CACHE_TTL.SHORT);
           return upcomingEvents;
         },
-        enabled: !!teamId,
+        enabled: !!teamId && !!supabase,
         staleTime: CACHE_TTL.SHORT,
         gcTime: CACHE_TTL.MEDIUM,
         keepPreviousData: true,
@@ -228,9 +230,9 @@ export function useUpcomingEvents(teamId, teamColors) {
   })[0];
 }
 
-const usePrefetchAdjacentPeriods = (teamId, currentView, currentDate, teamColors, queryClient) => {
+const usePrefetchAdjacentPeriods = (supabase, teamId, currentView, currentDate, teamColors, queryClient) => {
   useEffect(() => {
-    if (!teamId || !currentDate) return;
+    if (!teamId || !currentDate || !supabase) return;
 
     const offsets = {
       [CALENDAR_VIEWS.WEEK]: 7,
@@ -247,13 +249,14 @@ const usePrefetchAdjacentPeriods = (teamId, currentView, currentDate, teamColors
     devLog('🔮 Prefetching calendar view', { currentView, nextKey });
     queryClient.prefetchQuery({
       queryKey: queryKeys.calendarEvents(teamId, currentView, nextKey),
-      queryFn: () => fetchAndCacheEvents(teamId, currentView, nextDate, teamColors),
+      queryFn: () => fetchAndCacheEvents(supabase, teamId, currentView, nextDate, teamColors),
       staleTime: CACHE_TTL.SHORT,
   });
-  }, [teamId, currentView, currentDate, teamColors, queryClient]);
+  }, [teamId, currentView, currentDate, teamColors, queryClient, supabase]);
 };
 
 export function useCalendarData(currentView, currentDate) {
+  const supabase = useSupabase();
   const { user, teamId } = useTeamContextIds();
   const queryClient = useQueryClient();
 
@@ -266,17 +269,46 @@ export function useCalendarData(currentView, currentDate) {
     });
   }, [user, teamId, currentView, currentDate]);
 
-  const teamColorsQuery = useTeamColors(teamId);
-    const teamColors = teamColorsQuery?.data || { primary: '#FF4444', secondary: '#000000' };
-  const calendarEventsQuery = useCalendarEvents(teamId, currentView, currentDate, teamColors);
-  const upcomingEventsQuery = useUpcomingEvents(teamId, teamColors);
+  const teamColorsQuery = useTeamColors(supabase, teamId);
+  const teamColors = teamColorsQuery?.data || { primary: '#FF4444', secondary: '#000000' };
+  
+  // Fetch user groups and role for event filtering
+  const { userGroupIds, userRole, isLoading: isLoadingUserContext } = useUserGroupsAndRole(teamId, !!teamId);
+  
+  const calendarEventsQuery = useCalendarEvents(supabase, teamId, currentView, currentDate, teamColors);
+  const upcomingEventsQuery = useUpcomingEvents(supabase, teamId, teamColors);
 
-  usePrefetchAdjacentPeriods(teamId, currentView, currentDate, teamColors, queryClient);
+  usePrefetchAdjacentPeriods(supabase, teamId, currentView, currentDate, teamColors, queryClient);
+
+  // Filter events by visibility (using isEventVisibleToUser)
+  const filteredEvents = useMemo(() => {
+    if (!calendarEventsQuery?.data || !user) {
+      return [];
+    }
+    
+    const { isEventVisibleToUser } = require('../services/eventService');
+    return calendarEventsQuery.data.filter(event => 
+      isEventVisibleToUser(event, user, userGroupIds, userRole)
+    );
+  }, [calendarEventsQuery?.data, user, userGroupIds, userRole]);
+
+  // Filter upcoming events by visibility
+  const filteredUpcomingEvents = useMemo(() => {
+    if (!upcomingEventsQuery?.data || !user) {
+      return [];
+    }
+    
+    const { isEventVisibleToUser } = require('../services/eventService');
+    return upcomingEventsQuery.data.filter(event => 
+      isEventVisibleToUser(event, user, userGroupIds, userRole)
+    );
+  }, [upcomingEventsQuery?.data, user, userGroupIds, userRole]);
 
   const isLoading =
     (teamColorsQuery?.isLoading && !teamColorsQuery?.data) ||
     (calendarEventsQuery?.isLoading && !calendarEventsQuery?.data) ||
-    (upcomingEventsQuery?.isLoading && !upcomingEventsQuery?.data);
+    (upcomingEventsQuery?.isLoading && !upcomingEventsQuery?.data) ||
+    isLoadingUserContext;
   const isFetching =
     teamColorsQuery?.isFetching || calendarEventsQuery?.isFetching || upcomingEventsQuery?.isFetching;
   const error =
@@ -286,8 +318,8 @@ export function useCalendarData(currentView, currentDate) {
     () => ({
       teamId,
       teamColors,
-      events: calendarEventsQuery?.data || [],
-      upcomingEvents: upcomingEventsQuery?.data || [],
+      events: filteredEvents,
+      upcomingEvents: filteredUpcomingEvents,
       isLoading,
       isFetching,
       error,
@@ -306,8 +338,8 @@ export function useCalendarData(currentView, currentDate) {
     [
       teamId,
       teamColors,
-      calendarEventsQuery?.data,
-      upcomingEventsQuery?.data,
+      filteredEvents,
+      filteredUpcomingEvents,
       isLoading,
       isFetching,
       error,

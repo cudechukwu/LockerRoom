@@ -1,10 +1,8 @@
-import { supabase } from './supabase';
-
 /**
  * Ensure a user_profiles row exists for the authenticated user.
  * Safe to call repeatedly thanks to upsert/onConflict.
  */
-export async function ensureUserProfile(user, displayName) {
+export async function ensureUserProfile(supabaseClient, user, displayName) {
   if (!user?.id) {
     console.warn('ensureUserProfile called without valid user');
     return;
@@ -21,7 +19,7 @@ export async function ensureUserProfile(user, displayName) {
     bio: '',
   };
 
-  const { error } = await supabase
+  const { error } = await supabaseClient
     .from('user_profiles')
     .upsert(profilePayload, { onConflict: 'user_id' });
 
@@ -34,7 +32,7 @@ export async function ensureUserProfile(user, displayName) {
 /**
  * Ensure a team_member_profiles row exists for the given team/user combo.
  */
-export async function ensureTeamMemberProfile(teamId, userId, role = 'player') {
+export async function ensureTeamMemberProfile(supabaseClient, teamId, userId, role = 'player') {
   if (!teamId || !userId) {
     console.warn('ensureTeamMemberProfile called without teamId/userId', { teamId, userId });
     return;
@@ -49,7 +47,7 @@ export async function ensureTeamMemberProfile(teamId, userId, role = 'player') {
     is_complete: false,
   };
 
-  const { error } = await supabase
+  const { error } = await supabaseClient
     .from('team_member_profiles')
     .upsert(profilePayload, { onConflict: 'team_id,user_id' });
 
@@ -63,17 +61,17 @@ export async function ensureTeamMemberProfile(teamId, userId, role = 'player') {
  * Seed baseline profile data for onboarding flows.
  * Accepts either a team object or teamId string.
  */
-export async function seedInitialData({ user, team, teamId, role = 'player' }) {
+export async function seedInitialData(supabaseClient, { user, team, teamId, role = 'player' }) {
   if (!user?.id) {
     throw new Error('seedInitialData requires a user with an id');
   }
 
   const resolvedTeamId = team?.id || teamId;
 
-  await ensureUserProfile(user);
+  await ensureUserProfile(supabaseClient, user);
 
   if (resolvedTeamId) {
-    await ensureTeamMemberProfile(resolvedTeamId, user.id, role);
+    await ensureTeamMemberProfile(supabaseClient, resolvedTeamId, user.id, role);
   }
 }
 

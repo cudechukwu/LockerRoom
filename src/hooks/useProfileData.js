@@ -10,6 +10,7 @@ import {
   getUserProfile 
 } from '../api/profiles';
 import { getTeamInfo, isTeamAdmin } from '../api/teamMembers';
+import { useSupabase } from '../providers/SupabaseProvider';
 
 /**
  * Unified Profile Data Hook - Hybrid Architecture
@@ -22,6 +23,7 @@ import { getTeamInfo, isTeamAdmin } from '../api/teamMembers';
  * Provides instant render from cache + background refresh
  */
 export const useProfileData = () => {
+  const supabase = useSupabase();
   const { data: ids, isLoading: idsLoading, error: idsError } = useAuthTeam();
   const teamId = ids?.teamId;
   const userId = ids?.userId;
@@ -52,32 +54,32 @@ export const useProfileData = () => {
     queries: [
       {
         queryKey: queryKeys.teamInfo(teamId),
-        queryFn: () => getTeamInfo(teamId),
-        enabled: !!teamId,
+        queryFn: () => getTeamInfo(supabase, teamId),
+        enabled: !!teamId && !!supabase,
         staleTime: 5 * 60 * 1000, // 5 minutes - team info changes rarely
       },
       {
         queryKey: queryKeys.userProfile(userId),
-        queryFn: () => getUserProfile(userId),
-        enabled: !!userId,
+        queryFn: () => getUserProfile(supabase, userId),
+        enabled: !!userId && !!supabase,
         staleTime: 10 * 60 * 1000, // 10 minutes - profile changes rarely
       },
       {
         queryKey: queryKeys.teamMemberProfile(teamId, userId),
-        queryFn: () => getTeamMemberProfile(teamId, userId),
-        enabled: !!teamId && !!userId,
+        queryFn: () => getTeamMemberProfile(supabase, teamId, userId),
+        enabled: !!teamId && !!userId && !!supabase,
         staleTime: 5 * 60 * 1000, // 5 minutes - moderate changes
       },
       {
         queryKey: queryKeys.teamAdminStatus(teamId, userId),
-        queryFn: () => isTeamAdmin(teamId),
-        enabled: !!teamId && !!userId,
+        queryFn: () => isTeamAdmin(supabase, teamId),
+        enabled: !!teamId && !!userId && !!supabase,
         staleTime: 10 * 60 * 1000, // 10 minutes - admin status rarely changes
       },
       {
         queryKey: queryKeys.playerStats(teamId, userId),
-        queryFn: () => getPlayerStats(teamId, userId),
-        enabled: !!teamId && !!userId,
+        queryFn: () => getPlayerStats(supabase, teamId, userId),
+        enabled: !!teamId && !!userId && !!supabase,
         staleTime: 5 * 60 * 1000, // 5 minutes - stats change moderately
       },
     ],

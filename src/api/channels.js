@@ -7,7 +7,12 @@ import { supabase } from '../lib/supabase';
  * @param {string} teamId - Team ID
  * @returns {Promise<Object>} Conversation summary with channels, DMs, and unread counts
  */
-export const getTeamConversationSummary = async (teamId) => {
+export const getTeamConversationSummary = async (supabaseClient, teamId) => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     console.log('📊 getTeamConversationSummary called with teamId:', teamId);
     

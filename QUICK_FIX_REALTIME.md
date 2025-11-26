@@ -56,3 +56,5 @@ Make sure your RLS policies allow SELECT for authenticated users on:
 If you want to use the app without incoming call notifications for now, you can comment out the call listener setup in `App.js`. The app will work, but you won't get incoming call notifications.
 
 
+
+

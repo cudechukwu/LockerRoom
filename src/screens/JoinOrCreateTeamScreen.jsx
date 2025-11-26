@@ -13,7 +13,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { COLORS } from '../constants/colors';
 import { getFontSize, getFontWeight } from '../constants/fonts';
 import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
@@ -21,6 +21,7 @@ import { TeamContext } from '../contexts/TeamContext';
 import { ensureTeamMemberProfile } from '../lib/onboarding';
 
 const JoinOrCreateTeamScreen = ({ navigation }) => {
+  const supabase = useSupabase();
   const { user, refreshBootstrap } = useContext(AppBootstrapContext);
   const { teams } = useContext(TeamContext);
   const [joinCode, setJoinCode] = useState('');
@@ -114,7 +115,7 @@ const JoinOrCreateTeamScreen = ({ navigation }) => {
       }
 
       try {
-        await ensureTeamMemberProfile(teamId, user.id, 'player');
+        await ensureTeamMemberProfile(supabase, teamId, user.id, 'player');
       } catch (profileError) {
         console.warn('Failed to create team member profile after join:', profileError);
       }

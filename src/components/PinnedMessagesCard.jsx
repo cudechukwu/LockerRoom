@@ -3,12 +3,14 @@ import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'rea
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getPinnedMessages } from '../api/chat';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { getFontSize, getFontWeight } from '../constants/fonts';
 import { COLORS } from '../constants/colors';
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 const PinnedMessagesCard = ({ channelId, conversationType = 'channel' }) => {
+  const supabase = useSupabase();
   const [pinnedMessages, setPinnedMessages] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -45,7 +47,7 @@ const PinnedMessagesCard = ({ channelId, conversationType = 'channel' }) => {
 
   const refreshInBackground = async (cacheKey) => {
     try {
-      const { data, error } = await getPinnedMessages(channelId, { limit: 3 });
+      const { data, error } = await getPinnedMessages(supabase, channelId, { limit: 3 });
       if (error) throw error;
       
       const pinnedData = data || [];

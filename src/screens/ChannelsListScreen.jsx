@@ -32,7 +32,7 @@ import { TYPOGRAPHY, createTypographyStyle, FONT_SIZES, FONT_WEIGHTS } from '../
 import CreateChannelModal from '../components/CreateChannelModal';
 import ChannelsSkeletonLoader from '../components/ChannelsSkeletonLoader';
 import { createChannel, findOrCreateDirectMessage } from '../api/chat';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 import * as Haptics from 'expo-haptics';
 
 const { width, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -75,6 +75,7 @@ const SearchInput = React.memo(({ value, onChangeText }) => {
 });
 
 const ChannelsListScreen = ({ navigation, route }) => {
+  const supabase = useSupabase();
   const { teamId } = route.params;
   console.log('🏠 ChannelsListScreen received teamId:', teamId);
   
@@ -147,7 +148,7 @@ const ChannelsListScreen = ({ navigation, route }) => {
   const loadTeamMembers = async () => {
     try {
       setIsLoadingPeople(true);
-      const { data: profilesData, error } = await getTeamMemberProfiles(teamId);
+      const { data: profilesData, error } = await getTeamMemberProfiles(supabase, teamId);
       if (error) throw error;
       
       // Get active conversation user IDs
@@ -490,6 +491,7 @@ const ChannelsListScreen = ({ navigation, route }) => {
         onPress={async () => {
           try {
             const { data, error } = await findOrCreateDirectMessage(
+              supabase,
               teamId,
               item.user_id,
               personName

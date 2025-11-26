@@ -38,7 +38,7 @@ import ReactionBar from '../components/ReactionBar';
 import { getMessages, sendMessage, deleteMessage, subscribeToMessages, unsubscribe, markMessageAsRead, editMessage, toggleReaction, addReaction, removeReaction, getChannel } from '../api/chat';
 import { getTeamInfo } from '../api/teamMembers';
 import { dataCache, CACHE_KEYS } from '../utils/dataCache';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useAuthTeam } from '../hooks/useAuthTeam';
 import { getUserProfile } from '../api/profiles';
@@ -79,6 +79,7 @@ const getChannelIcon = (type, name) => {
 };
 
 const ChannelChatScreen = ({ navigation, route }) => {
+  const supabase = useSupabase();
   const { channelId, channelName, teamId } = route.params;
   
   // Get user ID from global cache (10-minute TTL, no redundant calls)
@@ -123,13 +124,13 @@ const ChannelChatScreen = ({ navigation, route }) => {
         if (cachedDetails) {
           setChannelDetails(cachedDetails);
           // Refresh in background
-          const { data, error } = await getChannel(channelId);
+          const { data, error } = await getChannel(supabase, channelId);
           if (!error && data) {
             dataCache.set(cacheKey, data, 5 * 60 * 1000);
             setChannelDetails(data);
           }
         } else {
-          const { data, error } = await getChannel(channelId);
+          const { data, error } = await getChannel(supabase, channelId);
           if (error) {
             console.warn('Error loading channel details:', error);
             return;
@@ -222,7 +223,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
       }
       
       // Fetch if not in cache
-      const { data: profile } = await getUserProfile(currentUserId);
+      const { data: profile } = await getUserProfile(supabase, currentUserId);
       if (profile?.avatar_url) {
         setCurrentUserAvatar(profile.avatar_url);
         // Cache it
@@ -239,7 +240,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
 
     console.log('🔔 Setting up realtime subscription for channel:', channelId);
     
-    const subscription = subscribeToMessages(channelId, (payload) => {
+    const subscription = subscribeToMessages(supabase, channelId, (payload) => {
       console.log('📨 Realtime message event:', payload.type, payload);
       
       switch (payload.type) {
@@ -275,7 +276,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
     return () => {
       console.log('🔕 Cleaning up realtime subscription for channel:', channelId);
       if (subscriptionRef.current) {
-        unsubscribe(subscriptionRef.current);
+        unsubscribe(supabase, subscriptionRef.current);
         subscriptionRef.current = null;
       }
       // Clear any pending reaction timeout on unmount
@@ -297,7 +298,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
       // This ensures we get the latest image if it was updated elsewhere
       const loadChannelDetails = async () => {
         try {
-          const { data, error } = await getChannel(channelId);
+          const { data, error } = await getChannel(supabase, channelId);
           if (!error && data) {
             const cacheKey = `channel_details_${channelId}`;
             dataCache.set(cacheKey, data, 5 * 60 * 1000);
@@ -344,7 +345,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
       }
       
       if (teamId) {
-        const teamData = await getTeamInfo(teamId);
+        const teamData = await getTeamInfo(supabase, teamId);
         
         // Cache the team data
         dataCache.set(CACHE_KEYS.TEAM_INFO(teamId), teamData, 5 * 60 * 1000); // 5 minutes
@@ -439,7 +440,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
         
         // WhatsApp-style: Refresh in background without loading spinner
         (async () => {
-          const { data, error } = await getMessages(channelId);
+          const { data, error } = await getMessages(supabase, channelId);
           if (error) {
             console.warn('Background refresh failed:', error);
             return;
@@ -453,7 +454,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
           
           // Batch mark last 5 messages as read
           const recentMessages = messagesWithNames.slice(-5);
-          await Promise.all(recentMessages.map(m => markMessageAsRead(m.id)));
+          await Promise.all(recentMessages.map(m => markMessageAsRead(supabase, m.id)));
           
           console.log('💬 Background refresh complete for channel:', channelId);
         })();
@@ -462,7 +463,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
       }
       
       setMessagesLoading(true);
-      const { data, error } = await getMessages(channelId);
+      const { data, error } = await getMessages(supabase, channelId);
       
       if (error) {
         throw error;
@@ -481,7 +482,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
 
       // Batch mark last 5 messages as read (efficient)
       const recentMessages = messagesWithNames.slice(-5);
-      await Promise.all(recentMessages.map(m => markMessageAsRead(m.id)));
+      await Promise.all(recentMessages.map(m => markMessageAsRead(supabase, m.id)));
       
       // Scroll to unread or bottom after messages are set
       setTimeout(() => {
@@ -520,6 +521,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
       setMessages(prev => [...prev, optimisticMessage]);
 
       const { data, error } = await sendMessage(
+        supabase,
         channelId, 
         {
           content: content.trim(),
@@ -635,7 +637,7 @@ const ChannelChatScreen = ({ navigation, route }) => {
 
     // If we're focused on this thread, mark it as read immediately
     if (isScreenFocused && newMessage?.id) {
-      markMessageAsRead(newMessage.id);
+      markMessageAsRead(supabase, newMessage.id);
     }
 
     // Show toast notification if screen is not focused

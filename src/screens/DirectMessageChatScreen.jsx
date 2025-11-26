@@ -33,7 +33,7 @@ import ImageViewer from '../components/ImageViewer';
 import { getMessages, sendMessage, deleteMessage, subscribeToMessages, unsubscribe, markMessageAsRead } from '../api/chat';
 import { getTeamInfo } from '../api/teamMembers';
 import { dataCache, CACHE_KEYS } from '../utils/dataCache';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../hooks/queryKeys';
@@ -41,6 +41,7 @@ import { queryKeys } from '../hooks/queryKeys';
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const DirectMessageChatScreen = ({ navigation, route }) => {
+  const supabase = useSupabase();
   const { channelId, channelName, teamId, isGroup = false } = route.params;
   
   const [messages, setMessages] = useState([]);
@@ -70,7 +71,7 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
 
     console.log('🔔 Setting up realtime subscription for DM channel:', channelId);
     
-    const subscription = subscribeToMessages(channelId, (payload) => {
+    const subscription = subscribeToMessages(supabase, channelId, (payload) => {
       console.log('📨 Realtime DM message event:', payload.type, payload);
       
       switch (payload.type) {
@@ -103,7 +104,7 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
     return () => {
       console.log('🔕 Cleaning up realtime subscription for DM channel:', channelId);
       if (subscriptionRef.current) {
-        unsubscribe(subscriptionRef.current);
+        unsubscribe(supabase, subscriptionRef.current);
         subscriptionRef.current = null;
       }
     };
@@ -152,7 +153,7 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
       }
       
       if (teamId) {
-        const teamData = await getTeamInfo(teamId);
+        const teamData = await getTeamInfo(supabase, teamId);
         
         // Cache the team data
         dataCache.set(CACHE_KEYS.TEAM_INFO(teamId), teamData, 5 * 60 * 1000); // 5 minutes
@@ -186,7 +187,7 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
         setMessagesLoading(false);
         
         // Refresh in background
-        const { data, error } = await getMessages(channelId);
+        const { data, error } = await getMessages(supabase, channelId);
         if (error) {
           console.warn('Background refresh failed:', error);
           return;
@@ -212,7 +213,7 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
       }
       
       setMessagesLoading(true);
-      const { data, error } = await getMessages(channelId);
+      const { data, error } = await getMessages(supabase, channelId);
       
       if (error) {
         throw error;
@@ -299,6 +300,7 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
       }
 
       const { data, parent, error } = await sendMessage(
+        supabase,
         channelId, 
         {
           content: content.trim(),
@@ -411,7 +413,7 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
       
       // Mark the sent message as read (we just saw it)
       if (data?.id) {
-        await markMessageAsRead(data.id);
+        await markMessageAsRead(supabase, data.id);
       }
 
       // Optimistically add/update this DM in the All conversations cache
@@ -565,7 +567,7 @@ const DirectMessageChatScreen = ({ navigation, route }) => {
 
     // If we're focused on this thread, mark it as read immediately
     if (isScreenFocused && newMessage?.id) {
-      markMessageAsRead(newMessage.id);
+      markMessageAsRead(supabase, newMessage.id);
     }
 
     // Show toast notification if screen is not focused

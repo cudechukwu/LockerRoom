@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { COLORS } from '../constants/colors';
 import { TYPOGRAPHY } from '../constants/typography';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 import EnhancedProfileCard from '../components/EnhancedProfileCard';
 import ProfileSkeletonLoader from '../components/ProfileSkeletonLoader';
 import NewsSection from '../components/NewsSection';
@@ -46,6 +46,7 @@ const MemoizedAboutSection = React.memo(AboutSection);
 const MemoizedSettingsSection = React.memo(SettingsSection);
 
 const ProfileScreen = ({ navigation }) => {
+  const supabase = useSupabase();
   // New React Query hook replaces all the old state management
   const { data, isLoading, isFetching, error } = useProfileData();
   const queryClient = useQueryClient();
@@ -142,7 +143,7 @@ const ProfileScreen = ({ navigation }) => {
       // Update in database
       if (field === 'display_name') {
         // Update user profile
-        const { error } = await upsertUserProfile({
+        const { error } = await upsertUserProfile(supabase, {
           user_id: userId,
           display_name: value,
           bio: profile?.user_profiles?.bio || '',
@@ -153,7 +154,7 @@ const ProfileScreen = ({ navigation }) => {
         const updateData = { [field]: value };
         console.log('Updating team member profile with:', updateData);
         
-        const { error } = await upsertTeamMemberProfile(teamId, userId, updateData);
+        const { error } = await upsertTeamMemberProfile(supabase, teamId, userId, updateData);
         if (error) {
           console.error('Database error details:', error);
           throw error;
@@ -191,7 +192,7 @@ const ProfileScreen = ({ navigation }) => {
       console.log('Updating profile with new image URL:', imageUrl);
       
       // Update in database
-      const { error } = await upsertUserProfile({
+      const { error } = await upsertUserProfile(supabase, {
         user_id: userId,
         display_name: profile?.user_profiles?.display_name || '',
         bio: profile?.user_profiles?.bio || '',

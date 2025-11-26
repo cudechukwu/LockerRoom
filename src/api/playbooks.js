@@ -4,11 +4,17 @@ import { supabase } from '../lib/supabase';
 /**
  * Get team playbooks with interactive animation data using optimized RPC function
  * This replaces multiple separate queries with a single database call
+ * @param {Object} supabaseClient - Supabase client instance (from useSupabase() hook)
  * @param {string} teamId - Team ID
  * @param {string} userId - User ID
  * @returns {Promise<Object>} Playbooks summary with animation data
  */
-export const getTeamPlaybooks = async (teamId, userId, limit = 10, offset = 0) => {
+export const getTeamPlaybooks = async (supabaseClient, teamId, userId, limit = 10, offset = 0) => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     console.log('📘 getTeamPlaybooks called with:', { teamId, userId, limit, offset });
     

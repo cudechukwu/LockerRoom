@@ -16,11 +16,12 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
 import { getFontWeight, getFontSize } from '../constants/fonts';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { ensureUserProfile } from '../lib/onboarding';
 import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
 
 const CreateAccountScreen = ({ navigation }) => {
+  const supabase = useSupabase();
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
@@ -104,7 +105,7 @@ const CreateAccountScreen = ({ navigation }) => {
         console.log('📧 Email confirmation required:', newUser.email_confirmed_at === null);
 
         try {
-          await ensureUserProfile(newUser, formData.name);
+          await ensureUserProfile(supabase, newUser, formData.name);
           console.log('✅ ensureUserProfile completed');
         } catch (seedError) {
           console.error('⚠️ Failed to seed user profile:', seedError);

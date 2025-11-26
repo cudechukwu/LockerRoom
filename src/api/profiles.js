@@ -9,7 +9,12 @@ import { decode as atob } from 'base-64';
 /**
  * Get user profile by user ID
  */
-export const getUserProfile = async (userId) => {
+export const getUserProfile = async (supabaseClient, userId) => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     const { data, error } = await supabase
       .from('user_profiles')
@@ -31,9 +36,9 @@ export const getUserProfile = async (userId) => {
 /**
  * Create or update user profile
  */
-export const upsertUserProfile = async (profileData) => {
+export const upsertUserProfile = async (supabaseClient, profileData) => {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('user_profiles')
       .upsert(profileData, { 
         onConflict: 'user_id',
@@ -56,8 +61,16 @@ export const upsertUserProfile = async (profileData) => {
 
 /**
  * Get team member profile
+ * @param {Object} supabaseClient - Supabase client instance (from useSupabase() hook)
+ * @param {string} teamId - Team ID
+ * @param {string} userId - User ID
  */
-export const getTeamMemberProfile = async (teamId, userId) => {
+export const getTeamMemberProfile = async (supabaseClient, teamId, userId) => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     // First get the team member profile
     const { data: teamProfile, error: teamError } = await supabase
@@ -116,7 +129,12 @@ export const getTeamMemberProfile = async (teamId, userId) => {
 /**
  * Get all team member profiles for a team
  */
-export const getTeamMemberProfiles = async (teamId) => {
+export const getTeamMemberProfiles = async (supabaseClient, teamId) => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     // Get current user to exclude them from results
     const { data: { user } } = await supabase.auth.getUser();
@@ -178,7 +196,7 @@ export const getTeamMemberProfiles = async (teamId) => {
 /**
  * Create or update team member profile
  */
-export const upsertTeamMemberProfile = async (teamId, userId, profileData) => {
+export const upsertTeamMemberProfile = async (supabaseClient, teamId, userId, profileData) => {
   try {
     const profileWithIds = {
       ...profileData,
@@ -186,7 +204,7 @@ export const upsertTeamMemberProfile = async (teamId, userId, profileData) => {
       user_id: userId
     };
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
       .from('team_member_profiles')
       .upsert(profileWithIds, { 
         onConflict: 'team_id,user_id',
@@ -229,7 +247,12 @@ export const deleteTeamMemberProfile = async (teamId, userId) => {
 /**
  * Get player stats for a season
  */
-export const getPlayerStats = async (teamId, userId, season = '2024-2025') => {
+export const getPlayerStats = async (supabaseClient, teamId, userId, season = '2024-2025') => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     const { data, error } = await supabase
       .from('player_stats')
@@ -288,7 +311,7 @@ export const upsertPlayerStats = async (teamId, userId, season, statsData) => {
 /**
  * Upload avatar to Supabase Storage
  */
-export const uploadAvatar = async (userId, file) => {
+export const uploadAvatar = async (supabaseClient, userId, file) => {
   try {
     // Create file path: avatars/{userId}/avatar.{extension}
     const fileExt = file.name.split('.').pop();
@@ -314,7 +337,7 @@ export const uploadAvatar = async (userId, file) => {
     // Upload binary data (React Native compatible)
     console.log('Uploading binary data to Supabase Storage...');
     
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    const { data: uploadData, error: uploadError } = await supabaseClient.storage
       .from('avatars')
       .upload(filePath, byteArray, {
         cacheControl: '3600',
@@ -330,7 +353,7 @@ export const uploadAvatar = async (userId, file) => {
     console.log('Upload successful:', uploadData);
 
     // Get public URL
-    const { data: urlData } = supabase.storage
+    const { data: urlData } = supabaseClient.storage
       .from('avatars')
       .getPublicUrl(filePath);
 

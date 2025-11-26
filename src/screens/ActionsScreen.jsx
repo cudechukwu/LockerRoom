@@ -15,12 +15,13 @@ import { COLORS } from '../constants/colors';
 import { TYPOGRAPHY, FONT_SIZES, FONT_WEIGHTS } from '../constants/typography';
 import ActionCard from '../components/ActionCard';
 import { getActionsByRole, ACTION_CONFIGS } from '../constants/actions';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
 
 const ActionsScreen = ({ navigation }) => {
+  const supabase = useSupabase();
   const insets = useSafeAreaInsets();
   const tabBarHeight = Platform.OS === 'ios' ? 88 : 60;
   const adjustedTabBarHeight = tabBarHeight + Math.max(insets.bottom - 10, 0);
@@ -80,6 +81,9 @@ const ActionsScreen = ({ navigation }) => {
           initialView: 'day',
           initialDate: new Date().toISOString(),
         });
+        break;
+      case 'attendance_groups':
+        navigation.navigate('AttendanceGroups');
         break;
       case 'notes':
         // TODO: Navigate to Notes screen

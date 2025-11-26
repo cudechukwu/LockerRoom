@@ -15,8 +15,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
 import { TYPOGRAPHY } from '../constants/typography';
 import { uploadAvatar } from '../api/profiles';
+import { useSupabase } from '../providers/SupabaseProvider';
 
 const ImagePickerModal = ({ visible, onClose, onImageSelected, currentImageUrl, userId, customUploadFunction, onDelete }) => {
+  const supabase = useSupabase();
   const [loading, setLoading] = useState(false);
 
   const requestPermissions = async () => {
@@ -98,7 +100,7 @@ const ImagePickerModal = ({ visible, onClose, onImageSelected, currentImageUrl, 
 
       console.log('Uploading image with file:', file);
 
-        const result = await uploadAvatar(userId, file);
+        const result = await uploadAvatar(supabase, userId, file);
       
       if (result.error) {
         console.error('Upload error details:', result.error);

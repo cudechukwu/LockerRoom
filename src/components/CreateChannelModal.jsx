@@ -21,11 +21,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { getFontFamily, getFontWeight, getFontSize } from '../constants/fonts';
 import { COLORS } from '../constants/colors';
 import { fetchTeamMembers, createChannel, createGroup } from '../api/teamMembers';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const CreateChannelModal = ({ visible, onClose, teamId, onChannelCreated }) => {
+  const supabase = useSupabase();
   const [translateY] = useState(new Animated.Value(SCREEN_HEIGHT));
   const [currentSnapPoint, setCurrentSnapPoint] = useState(0); // 0 = 45%, 1 = 90%
   
@@ -123,7 +124,7 @@ const CreateChannelModal = ({ visible, onClose, teamId, onChannelCreated }) => {
     console.log('🚀 loadTeamMembers function started with teamId:', teamId);
     setLoading(true);
     try {
-      const members = await fetchTeamMembers(teamId);
+      const members = await fetchTeamMembers(supabase, teamId);
       console.log('📋 Modal received members:', members);
       console.log('📋 Members length:', members?.length);
       setTeamMembers(members);

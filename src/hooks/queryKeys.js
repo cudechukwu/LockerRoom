@@ -32,4 +32,11 @@ export const queryKeys = {
   callSession: (callSessionId) => ['callSession', callSessionId],
   activeCalls: (teamId) => ['activeCalls', teamId],
   callHistory: (teamId) => ['callHistory', teamId],
+  // Event Details system keys
+  eventCreator: (userId) => ['eventCreator', userId],
+  eventRole: (teamId, userId) => ['eventRole', teamId, userId],
+  eventAttendance: (eventId) => ['eventAttendance', eventId],
+  userAttendanceStatus: (eventId) => ['userAttendanceStatus', eventId],
+  // User groups for event filtering
+  userGroups: (teamId, userId) => ['userGroups', teamId, userId],
 };

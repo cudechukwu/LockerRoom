@@ -8,6 +8,7 @@ import {
   sharePlay, 
   getSharedPlay 
 } from '../api/playbooks';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { queryKeys } from './queryKeys';
 import { useAuthTeam } from './useAuthTeam';
 
@@ -18,13 +19,14 @@ import { useAuthTeam } from './useAuthTeam';
  * @returns {Object} React Query result with playbooks data
  */
 export const usePlaybooks = (teamId) => {
+  const supabase = useSupabase();
   const { data: authData } = useAuthTeam();
   const userId = authData?.userId;
 
   const query = useQuery({
     queryKey: queryKeys.playbooks(teamId),
-    queryFn: () => getTeamPlaybooks(teamId, userId),
-    enabled: !!teamId && !!userId,
+    queryFn: () => getTeamPlaybooks(supabase, teamId, userId),
+    enabled: !!teamId && !!userId && !!supabase,
     staleTime: 5 * 60 * 1000, // 5 minutes - playbooks change moderately
     cacheTime: 10 * 60 * 1000, // 10 minutes
     refetchOnWindowFocus: false, // We control this manually

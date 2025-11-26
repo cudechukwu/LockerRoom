@@ -5,7 +5,12 @@ import { supabase } from '../lib/supabase';
  * Replaces getTotalNotificationCount, getUnreadMessageCount, and getPriorityAlertsCount
  * with a single database query for better performance
  */
-export const getTeamNotificationSummary = async (teamId) => {
+export const getTeamNotificationSummary = async (supabaseClient, teamId) => {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     console.log('📊 getTeamNotificationSummary called with teamId:', teamId);
     

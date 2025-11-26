@@ -6,6 +6,7 @@ export const ACTION_TYPES = {
   POLLS: 'polls',
   ANNOUNCEMENTS: 'announcements',
   TASKS: 'tasks',
+  ATTENDANCE_GROUPS: 'attendance_groups',
   SETTINGS: 'settings',
 };
 
@@ -55,13 +56,22 @@ export const ACTION_CONFIGS = {
     coachOrder: 5,
     playerOrder: 5,
   },
+  [ACTION_TYPES.ATTENDANCE_GROUPS]: {
+    id: 'attendance_groups',
+    title: 'Groups',
+    subtitle: 'Create & manage custom groups',
+    icon: 'people-outline',
+    color: '#06B6D4',
+    coachOrder: 6,
+    playerOrder: 6, // Visible to all team members (must be < 50)
+  },
   [ACTION_TYPES.SETTINGS]: {
     id: 'settings',
     title: 'Settings',
     subtitle: 'Preferences & profile',
     icon: 'cog-outline',
     color: '#6B7280',
-    coachOrder: 6,
+    coachOrder: 7,
     playerOrder: 6,
   },
 };
@@ -74,8 +84,10 @@ export const getActionsByRole = (userRole) => {
     // Coaches see "Post First" order
     return actions.sort((a, b) => a.coachOrder - b.coachOrder);
   } else {
-    // Players see "Consume First" order
-    return actions.sort((a, b) => a.playerOrder - b.playerOrder);
+    // Players see "Consume First" order - filter out coach-only actions
+    return actions
+      .filter(action => action.playerOrder < 50) // Hide actions with high playerOrder (coach-only)
+      .sort((a, b) => a.playerOrder - b.playerOrder);
   }
 };
 

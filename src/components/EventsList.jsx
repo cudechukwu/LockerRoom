@@ -13,7 +13,8 @@ const EventsList = ({
   isToday, 
   onEventPress, 
   onAddEvent,
-  teamColors 
+  teamColors,
+  attendanceStatusMap = {} // Map of eventId -> { status, checkedInAt }
 }) => {
   // Format time for display
   const formatTime = useCallback((date) => {
@@ -38,6 +39,28 @@ const EventsList = ({
     });
   }, [events]);
 
+  // Get attendance indicator color and icon
+  const getAttendanceIndicator = (eventId) => {
+    const attendance = attendanceStatusMap[eventId];
+    if (!attendance || !attendance.status) {
+      return null; // No attendance data
+    }
+
+    const status = attendance.status;
+    if (status === 'present') {
+      return { color: COLORS.SUCCESS, icon: 'checkmark-circle' };
+    } else if (status === 'late_10' || status === 'late_30') {
+      return { color: COLORS.WARNING, icon: 'time' };
+    } else if (status === 'very_late') {
+      return { color: '#FF6B35', icon: 'warning' };
+    } else if (status === 'absent') {
+      return { color: COLORS.ERROR, icon: 'close-circle' };
+    } else if (status === 'excused') {
+      return { color: '#9CA3AF', icon: 'information-circle' };
+    }
+    return null;
+  };
+
   // Render event card with enhanced visual depth
   const renderEventCard = (event, index) => {
     const startTime = formatTime(event.startTime);
@@ -45,6 +68,7 @@ const EventsList = ({
     const eventType = event.eventType || event.type;
     const typeInfo = getEventTypeInfo(eventType, teamColors);
     const isGame = eventType === EVENT_TYPES.GAME;
+    const attendanceIndicator = getAttendanceIndicator(event.id);
     
     // Check if event has passed (end time is in the past)
     const isPastEvent = (() => {
@@ -95,8 +119,29 @@ const EventsList = ({
         </View>
         
         <View style={styles.eventCardContent}>
-          <Text style={styles.eventCardTitle}>{event.title}</Text>
+          <View style={styles.eventCardTitleRow}>
+            <Text style={styles.eventCardTitle}>{event.title}</Text>
+            {/* Visibility badges */}
+            {event.visibility === 'coaches_only' && (
+              <Ionicons 
+                name="lock-closed-outline" 
+                size={14} 
+                color="rgba(255, 255, 255, 0.5)" 
+                style={styles.visibilityIcon}
+              />
+            )}
+          </View>
           <View style={styles.eventCardMeta}>
+            {/* Group badge for group-specific events */}
+            {event.assigned_attendance_groups && 
+             Array.isArray(event.assigned_attendance_groups) && 
+             event.assigned_attendance_groups.length > 0 && (
+              <View style={styles.groupBadge}>
+                <Text style={styles.groupBadgeText}>
+                  {event.assigned_attendance_groups.length === 1 ? 'Group' : `+${event.assigned_attendance_groups.length}`}
+                </Text>
+              </View>
+            )}
             <Text style={styles.eventCardTime}>
               {startTime} - {endTime}
             </Text>
@@ -115,6 +160,15 @@ const EventsList = ({
         </View>
         
         <View style={styles.chevronContainer}>
+          {attendanceIndicator && (
+            <View style={styles.attendanceIndicator}>
+              <Ionicons 
+                name={attendanceIndicator.icon} 
+                size={18} 
+                color={attendanceIndicator.color} 
+              />
+            </View>
+          )}
           <Ionicons name="chevron-forward" size={16} color={COLORS.TEXT_TERTIARY} />
         </View>
       </View>
@@ -356,18 +410,43 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingRight: 6,
   },
+  eventCardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 3,
+    gap: 6,
+  },
   eventCardTitle: {
     ...TYPOGRAPHY.body,
     color: COLORS.WHITE,
     fontSize: scaleFont(FONT_SIZES.SM),
     fontWeight: FONT_WEIGHTS.SEMIBOLD,
-    marginBottom: 3,
     letterSpacing: -0.1,
+    flex: 1,
+  },
+  visibilityIcon: {
+    marginLeft: 4,
   },
   eventCardMeta: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 0,
+    gap: 6,
+  },
+  groupBadge: {
+    height: 16,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  groupBadgeText: {
+    ...TYPOGRAPHY.caption,
+    color: COLORS.TEXT_SECONDARY,
+    fontSize: scaleFont(10),
+    fontWeight: FONT_WEIGHTS.MEDIUM,
   },
   eventCardTime: {
     ...TYPOGRAPHY.caption,
@@ -396,7 +475,13 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   chevronContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     paddingLeft: 4,
+  },
+  attendanceIndicator: {
+    // Indicator dot/icon for attendance status
   },
   emptyState: {
     minHeight: 400,

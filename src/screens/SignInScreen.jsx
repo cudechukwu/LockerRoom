@@ -16,11 +16,12 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../constants/colors';
 import { getFontWeight, getFontSize } from '../constants/fonts';
-import { supabase } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { ensureUserProfile } from '../lib/onboarding';
 import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
 
 const SignInScreen = ({ navigation }) => {
+  const supabase = useSupabase();
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
@@ -63,7 +64,7 @@ const SignInScreen = ({ navigation }) => {
 
       if (data.user) {
         try {
-          await ensureUserProfile(data.user);
+          await ensureUserProfile(supabase, data.user);
         } catch (seedError) {
           console.error('⚠️ ensureUserProfile failed after sign in:', seedError);
         }

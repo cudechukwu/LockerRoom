@@ -16,7 +16,8 @@ import {
 } from 'react-native';
 import { COLORS } from '../constants/colors';
 import { getFontFamily, getFontWeight, getFontSize } from '../constants/fonts';
-import { supabase, TABLES, STORAGE_BUCKETS } from '../lib/supabase';
+import { useSupabase } from '../providers/SupabaseProvider';
+import { TABLES, STORAGE_BUCKETS } from '../lib/supabase';
 import { seedInitialData, ensureUserProfile } from '../lib/onboarding';
 import { AppBootstrapContext } from '../contexts/AppBootstrapContext';
 
@@ -24,6 +25,7 @@ const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
 
 const TeamSetupScreen = ({ navigation }) => {
+  const supabase = useSupabase();
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
@@ -157,7 +159,7 @@ const TeamSetupScreen = ({ navigation }) => {
 
       // Ensure base user profile exists even if they skipped account completion
       try {
-        await ensureUserProfile(user, user.user_metadata?.name || formData.team_name);
+        await ensureUserProfile(supabase, user, user.user_metadata?.name || formData.team_name);
       } catch (seedError) {
         console.warn('⚠️ ensureUserProfile during team creation failed:', seedError);
       }
@@ -217,7 +219,7 @@ const TeamSetupScreen = ({ navigation }) => {
       // TODO: Upload logo if provided
 
       try {
-        await seedInitialData({ user, team, role: 'coach' });
+        await seedInitialData(supabase, { user, team, role: 'coach' });
         console.log('✅ seedInitialData completed for team creator');
       } catch (seedError) {
         console.warn('⚠️ seedInitialData failed for team creator:', seedError);

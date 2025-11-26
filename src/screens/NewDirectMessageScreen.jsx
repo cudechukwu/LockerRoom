@@ -13,12 +13,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { createChannel } from '../api/chat';
 import { getTeamMemberProfiles } from '../api/profiles';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { colors } from '../constants/chatColors';
 import { fonts } from '../constants/chatFonts';
 import { getFontFamily, getFontWeight, getFontSize, isTablet } from '../constants/fonts';
 import ScreenBackground from '../components/ScreenBackground';
 
 const NewDirectMessageScreen = ({ navigation, route }) => {
+  const supabase = useSupabase();
   const { teamId } = route.params;
   const [searchQuery, setSearchQuery] = useState('');
   const [teamMembers, setTeamMembers] = useState([]);
@@ -27,12 +29,12 @@ const NewDirectMessageScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     loadTeamMembers();
-  }, [teamId]);
+  }, [teamId, supabase]);
 
   const loadTeamMembers = async () => {
     try {
       // Fetch real team members from API
-      const { data: profilesData, error } = await getTeamMemberProfiles(teamId);
+      const { data: profilesData, error } = await getTeamMemberProfiles(supabase, teamId);
       
       if (error) {
         throw error;

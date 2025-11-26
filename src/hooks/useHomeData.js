@@ -5,6 +5,7 @@ import { getTeamNotificationSummary } from '../api/notifications';
 import { getUpcomingEvents, getEventColor } from '../api/events';
 import { getUserProfile } from '../api/profiles';
 import { useAuthTeam } from './useAuthTeam';
+import { useSupabase } from '../providers/SupabaseProvider';
 import { queryKeys } from './queryKeys';
 import { COLORS } from '../constants/colors';
 
@@ -13,6 +14,7 @@ import { COLORS } from '../constants/colors';
  * This replaces the loadTeamData function with SWR pattern
  */
 export function useHomeData() {
+  const supabase = useSupabase();
   const { data: ids, isLoading: idsLoading, error: idsError } = useAuthTeam();
   const teamId = ids?.teamId;
   const userId = ids?.userId;
@@ -26,29 +28,29 @@ export function useHomeData() {
     queries: [
       {
         queryKey: queryKeys.teamInfo(validTeamId),
-        queryFn: () => getTeamInfo(validTeamId),
-        enabled: !!validTeamId,
+        queryFn: () => getTeamInfo(supabase, validTeamId),
+        enabled: !!validTeamId && !!supabase,
         staleTime: 5 * 60 * 1000, // 5 minutes - team info changes rarely
       },
       {
         queryKey: queryKeys.notifications(validTeamId, userId),
-        queryFn: () => getTeamNotificationSummary(validTeamId),
-        enabled: !!validTeamId && !!userId,
+        queryFn: () => getTeamNotificationSummary(supabase, validTeamId),
+        enabled: !!validTeamId && !!userId && !!supabase,
         staleTime: 120 * 1000, // 2 minutes - notifications refresh faster
       },
       {
         queryKey: queryKeys.nextEvent(validTeamId),
         queryFn: async () => {
-          const res = await getUpcomingEvents(validTeamId, 1);
+          const res = await getUpcomingEvents(supabase, validTeamId, 1);
           // Handle different return shapes explicitly
           return Array.isArray(res) ? res[0] : res?.data?.[0] ?? null;
         },
-        enabled: !!validTeamId,
+        enabled: !!validTeamId && !!supabase,
         staleTime: 5 * 60 * 1000, // 5 minutes - events don't change often
       },
       {
         queryKey: queryKeys.profile(userId),
-        queryFn: () => getUserProfile(userId),
+        queryFn: () => getUserProfile(supabase, userId),
         enabled: !!userId,
         staleTime: 10 * 60 * 1000, // 10 minutes - profile changes rarely
       },

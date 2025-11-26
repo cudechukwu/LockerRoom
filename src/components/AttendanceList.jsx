@@ -48,11 +48,11 @@ function AttendanceList({ eventId, teamId, isCoach = false, event = null, scroll
     if (!isCoach) return;
     
     const newSet = new Set(selectedPlayersRef.current);
-    if (newSet.has(userId)) {
-      newSet.delete(userId);
-    } else {
-      newSet.add(userId);
-    }
+      if (newSet.has(userId)) {
+        newSet.delete(userId);
+      } else {
+        newSet.add(userId);
+      }
     selectedPlayersRef.current = newSet;
     setSelectedPlayers(newSet); // Trigger UI update
   }, [isCoach]);
@@ -65,7 +65,7 @@ function AttendanceList({ eventId, teamId, isCoach = false, event = null, scroll
     if (result.success) {
       // Clear selection if this player was selected
       const newSet = new Set(selectedPlayersRef.current);
-      newSet.delete(userId);
+        newSet.delete(userId);
       selectedPlayersRef.current = newSet;
       setSelectedPlayers(newSet);
     }
@@ -86,8 +86,8 @@ function AttendanceList({ eventId, teamId, isCoach = false, event = null, scroll
           onPress: async () => {
             try {
               const userIds = Array.from(selectedPlayersRef.current);
-              const result = await bulkMarkAttendance(userIds, status);
-              if (result.success) {
+            const result = await bulkMarkAttendance(userIds, status);
+            if (result.success) {
                 const newSet = new Set();
                 selectedPlayersRef.current = newSet;
                 setSelectedPlayers(newSet);
@@ -199,34 +199,34 @@ function AttendanceList({ eventId, teamId, isCoach = false, event = null, scroll
 
 // Memoized BulkActionsBar to prevent list rerenders when selection changes
 const BulkActionsBar = memo(({ count, handleBulkMark, isMarking }) => (
-  <View style={styles.bulkActionsBar}>
-    <Text style={styles.bulkActionsText}>
+        <View style={styles.bulkActionsBar}>
+          <Text style={styles.bulkActionsText}>
       {count} selected
-    </Text>
-    <View style={styles.bulkActionsButtons}>
-      <TouchableOpacity
-        style={[styles.bulkActionButton, { backgroundColor: COLORS.SUCCESS }]}
-        onPress={() => handleBulkMark('present')}
-        disabled={isMarking}
-      >
-        <Text style={styles.bulkActionButtonText}>Mark Present</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.bulkActionButton, { backgroundColor: COLORS.WARNING }]}
-        onPress={() => handleBulkMark('late_10')}
-        disabled={isMarking}
-      >
-        <Text style={styles.bulkActionButtonText}>Mark Late</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[styles.bulkActionButton, { backgroundColor: COLORS.ERROR }]}
-        onPress={() => handleBulkMark('absent')}
-        disabled={isMarking}
-      >
-        <Text style={styles.bulkActionButtonText}>Mark Absent</Text>
-      </TouchableOpacity>
-    </View>
-  </View>
+          </Text>
+          <View style={styles.bulkActionsButtons}>
+            <TouchableOpacity
+              style={[styles.bulkActionButton, { backgroundColor: COLORS.SUCCESS }]}
+              onPress={() => handleBulkMark('present')}
+              disabled={isMarking}
+            >
+              <Text style={styles.bulkActionButtonText}>Mark Present</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.bulkActionButton, { backgroundColor: COLORS.WARNING }]}
+              onPress={() => handleBulkMark('late_10')}
+              disabled={isMarking}
+            >
+              <Text style={styles.bulkActionButtonText}>Mark Late</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.bulkActionButton, { backgroundColor: COLORS.ERROR }]}
+              onPress={() => handleBulkMark('absent')}
+              disabled={isMarking}
+            >
+              <Text style={styles.bulkActionButtonText}>Mark Absent</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 ));
 
 const styles = StyleSheet.create({

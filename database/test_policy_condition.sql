@@ -4,9 +4,9 @@
 -- Simulate the INSERT values
 WITH insert_values AS (
     SELECT 
-        'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid AS team_id,
+        '<TEAM_ID>'::uuid AS team_id,
         'e163e9b2-55ea-49aa-a8e7-3c83bf550d74'::uuid AS user_id,
-        '8d99f216-1454-4500-9652-f87922774f5c'::uuid AS auth_user_id
+        '<USER_ID>'::uuid AS auth_user_id
 )
 SELECT 
     'Policy condition test' AS test_name,

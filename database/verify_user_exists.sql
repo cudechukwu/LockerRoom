@@ -8,7 +8,7 @@ SELECT
     is_admin,
     team_id
 FROM team_members
-WHERE team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid
+WHERE team_id = '<TEAM_ID>'::uuid
 ORDER BY role, user_id;
 
 -- Check ALL team member roles
@@ -18,10 +18,10 @@ SELECT
     role,
     team_id
 FROM team_member_roles
-WHERE team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid
+WHERE team_id = '<TEAM_ID>'::uuid
 ORDER BY role, user_id;
 
--- Specifically check if current user (8d99f216-1454-4500-9652-f87922774f5c) exists
+-- Specifically check if current user (<USER_ID>) exists
 SELECT 
     'Current user check' AS check_name,
     'team_members' AS source,
@@ -29,8 +29,8 @@ SELECT
     role::text AS role,
     is_admin
 FROM team_members
-WHERE user_id = '8d99f216-1454-4500-9652-f87922774f5c'::uuid
-AND team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid
+WHERE user_id = '<USER_ID>'::uuid
+AND team_id = '<TEAM_ID>'::uuid
 
 UNION ALL
 
@@ -41,6 +41,6 @@ SELECT
     role::text AS role,
     NULL::boolean AS is_admin
 FROM team_member_roles
-WHERE user_id = '8d99f216-1454-4500-9652-f87922774f5c'::uuid
-AND team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid;
+WHERE user_id = '<USER_ID>'::uuid
+AND team_id = '<TEAM_ID>'::uuid;
 

@@ -10,7 +10,7 @@ SELECT
     auth.uid() AS auth_uid_value,
     CASE 
         WHEN auth.uid() IS NULL THEN '❌ PROBLEM: auth.uid() is NULL - RLS will fail'
-        WHEN auth.uid() = '8d99f216-1454-4500-9652-f87922774f5c'::uuid THEN '✅ CORRECT: auth.uid() matches expected user'
+        WHEN auth.uid() = '<USER_ID>'::uuid THEN '✅ CORRECT: auth.uid() matches expected user'
         ELSE '⚠️ WARNING: auth.uid() is different from expected user'
     END AS status;
 

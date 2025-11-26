@@ -41,7 +41,7 @@ The critical path (attendance check-in) now uses the provider pattern.
 1. **Restart the app completely** (to clear any cached client state)
 2. **Try marking attendance**
 3. **Run SQL diagnostic**: `SELECT auth.uid();` 
-   - Should return: `8d99f216-1454-4500-9652-f87922774f5c`
+   - Should return: `<USER_ID>`
    - Should NOT return: `NULL`
 4. **Verify RLS policy allows the insert**
 

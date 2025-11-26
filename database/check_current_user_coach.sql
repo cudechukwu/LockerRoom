@@ -1,4 +1,4 @@
--- Quick check: Is the current user (8d99f216-1454-4500-9652-f87922774f5c) a coach/admin?
+-- Quick check: Is the current user (<USER_ID>) a coach/admin?
 
 -- Check in team_members
 SELECT 
@@ -11,8 +11,8 @@ SELECT
         ELSE 'NO - You are not a coach/admin ✗'
     END AS coach_status
 FROM team_members
-WHERE user_id = '8d99f216-1454-4500-9652-f87922774f5c'::uuid
-AND team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid;
+WHERE user_id = '<USER_ID>'::uuid
+AND team_id = '<TEAM_ID>'::uuid;
 
 -- Check in team_member_roles
 SELECT 
@@ -23,18 +23,18 @@ SELECT
         ELSE 'NO - You are not a coach/admin ✗'
     END AS coach_status
 FROM team_member_roles
-WHERE user_id = '8d99f216-1454-4500-9652-f87922774f5c'::uuid
-AND team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid;
+WHERE user_id = '<USER_ID>'::uuid
+AND team_id = '<TEAM_ID>'::uuid;
 
 -- Final check: Does is_coach_or_admin return true?
 SELECT 
     'Final coach check' AS check_name,
     is_coach_or_admin(
-        'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid,
-        '8d99f216-1454-4500-9652-f87922774f5c'::uuid
+        '<TEAM_ID>'::uuid,
+        '<USER_ID>'::uuid
     ) AS is_coach,
     CASE 
-        WHEN is_coach_or_admin('ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid, '8d99f216-1454-4500-9652-f87922774f5c'::uuid) = TRUE 
+        WHEN is_coach_or_admin('<TEAM_ID>'::uuid, '<USER_ID>'::uuid) = TRUE 
         THEN 'YES - You can mark attendance ✓'
         ELSE 'NO - You cannot mark attendance ✗ (This is why RLS is blocking you)'
     END AS can_mark_attendance;

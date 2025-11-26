@@ -14,7 +14,7 @@ SELECT
         ELSE '❌ Not a coach in team_members'
     END as status
 FROM team_members tm
-WHERE tm.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+WHERE tm.team_id = '<TEAM_ID>'::UUID
 AND tm.user_id = auth.uid();
 
 -- Check what's in team_member_roles for the coach
@@ -29,18 +29,18 @@ SELECT
         ELSE '❌ Not a coach in team_member_roles'
     END as status
 FROM team_member_roles tmr
-WHERE tmr.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+WHERE tmr.team_id = '<TEAM_ID>'::UUID
 AND tmr.user_id = auth.uid();
 
 -- Test the function directly
 SELECT 
     'Function test' as test,
     is_coach_or_admin(
-        'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID,
+        '<TEAM_ID>'::UUID,
         auth.uid()
     ) as result,
     CASE 
-        WHEN is_coach_or_admin('ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID, auth.uid())
+        WHEN is_coach_or_admin('<TEAM_ID>'::UUID, auth.uid())
         THEN '✅ Function returns TRUE'
         ELSE '❌ Function returns FALSE'
     END as status;

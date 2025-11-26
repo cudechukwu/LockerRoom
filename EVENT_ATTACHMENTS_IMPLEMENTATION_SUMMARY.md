@@ -222,7 +222,7 @@ event-attachments/
 **Example:**
 ```
 event-attachments/
-  ddced7b8-e45b-45f9-ac31-96b2045f40e8/
+  <TEAM_ID>/
     ed4c9fe8-1c90-474d-8e7c-4f9dbaf4b3ec/
       1234567890-abc123.pdf
 ```

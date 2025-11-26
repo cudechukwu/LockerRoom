@@ -14,7 +14,7 @@ SELECT
         ELSE '❌ No coach indicators'
     END as analysis
 FROM team_members tm
-WHERE tm.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+WHERE tm.team_id = '<TEAM_ID>'::UUID
 AND tm.user_id = auth.uid();
 
 -- Check team_member_roles
@@ -29,7 +29,7 @@ SELECT
         ELSE '❌ Not a coach/admin role'
     END as analysis
 FROM team_member_roles tmr
-WHERE tmr.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+WHERE tmr.team_id = '<TEAM_ID>'::UUID
 AND tmr.user_id = auth.uid();
 
 -- Now let's manually trace through the function logic
@@ -39,21 +39,21 @@ SELECT
     CASE 
         WHEN EXISTS (
             SELECT 1 FROM team_member_roles tmr
-            WHERE tmr.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+            WHERE tmr.team_id = '<TEAM_ID>'::UUID
             AND tmr.user_id = auth.uid()
         ) THEN 'Found in team_member_roles'
         ELSE 'NOT found in team_member_roles'
     END as result,
     (
         SELECT role FROM team_member_roles tmr
-        WHERE tmr.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+        WHERE tmr.team_id = '<TEAM_ID>'::UUID
         AND tmr.user_id = auth.uid()
         LIMIT 1
     ) as found_role,
     CASE 
         WHEN (
             SELECT role FROM team_member_roles tmr
-            WHERE tmr.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+            WHERE tmr.team_id = '<TEAM_ID>'::UUID
             AND tmr.user_id = auth.uid()
             LIMIT 1
         ) IN ('head_coach', 'assistant_coach', 'team_admin') 
@@ -66,27 +66,27 @@ SELECT
     '=== STEP 2: Check team_members fallback ===' as step,
     (
         SELECT role FROM team_members tm
-        WHERE tm.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+        WHERE tm.team_id = '<TEAM_ID>'::UUID
         AND tm.user_id = auth.uid()
         LIMIT 1
     ) as found_role,
     (
         SELECT is_admin FROM team_members tm
-        WHERE tm.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+        WHERE tm.team_id = '<TEAM_ID>'::UUID
         AND tm.user_id = auth.uid()
         LIMIT 1
     ) as is_admin,
     CASE 
         WHEN (
             SELECT role FROM team_members tm
-            WHERE tm.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+            WHERE tm.team_id = '<TEAM_ID>'::UUID
             AND tm.user_id = auth.uid()
             LIMIT 1
         ) = 'coach' 
         THEN '✅ role = coach - should return TRUE'
         WHEN (
             SELECT is_admin FROM team_members tm
-            WHERE tm.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID
+            WHERE tm.team_id = '<TEAM_ID>'::UUID
             AND tm.user_id = auth.uid()
             LIMIT 1
         ) = TRUE
@@ -98,11 +98,11 @@ SELECT
 SELECT 
     '=== FINAL RESULT ===' as section,
     is_coach_or_admin(
-        'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID,
+        '<TEAM_ID>'::UUID,
         auth.uid()
     ) as function_result,
     CASE 
-        WHEN is_coach_or_admin('ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID, auth.uid())
+        WHEN is_coach_or_admin('<TEAM_ID>'::UUID, auth.uid())
         THEN '✅ Function returns TRUE'
         ELSE '❌ Function returns FALSE - THIS IS THE PROBLEM'
     END as final_status;

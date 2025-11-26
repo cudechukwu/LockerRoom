@@ -58,5 +58,5 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 GRANT EXECUTE ON FUNCTION is_coach_or_admin(UUID, UUID) TO authenticated;
 
 -- Test query (run this after updating the function)
--- SELECT is_coach_or_admin('ddced7b8-e45b-45f9-ac31-96b2045f40e8'::UUID, '8d99f216-1454-4500-9652-f87922774f5c'::UUID);
+-- SELECT is_coach_or_admin('<TEAM_ID>'::UUID, '<USER_ID>'::UUID);
 

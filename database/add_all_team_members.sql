@@ -4,7 +4,7 @@
 -- COACHES (4)
 INSERT INTO team_members (team_id, user_id, role) VALUES
 ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'e0b53182-d8ca-491e-9a8c-f24db1ebd8df', 'coach'),
-('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '8d99f216-1454-4500-9652-f87922774f5c', 'coach'),
+('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '<USER_ID>', 'coach'),
 ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'f1a2b3c4-d5e6-f7g8-h9i0-j1k2l3m4n5o6', 'coach'),
 ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6', 'coach')
 ON CONFLICT (team_id, user_id) DO UPDATE SET role = EXCLUDED.role;

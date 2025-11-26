@@ -27,7 +27,7 @@ SELECT
     'Function test (current user)' AS check_type,
     auth.uid() AS current_user_id,
     is_coach_or_admin(
-        'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid,  -- Your team_id
+        '<TEAM_ID>'::uuid,  -- Your team_id
         auth.uid()
     ) AS function_returns_true;
 
@@ -54,21 +54,21 @@ WHERE user_id = auth.uid();
 -- This shows which players the policy would allow you to mark
 SELECT 
     'RLS Policy Simulation (All Players)' AS check_type,
-    '8d99f216-1454-4500-9652-f87922774f5c'::uuid AS coach_user_id,
+    '<USER_ID>'::uuid AS coach_user_id,
     tm.user_id AS player_user_id,
     tm.role AS player_role,
-    'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid AS team_id,
+    '<TEAM_ID>'::uuid AS team_id,
     is_coach_or_admin(
-        'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid,
-        '8d99f216-1454-4500-9652-f87922774f5c'::uuid
+        '<TEAM_ID>'::uuid,
+        '<USER_ID>'::uuid
     ) AS coach_check_passes,
     true AS player_in_team,  -- Always true since we're querying from team_members
     (
-        is_coach_or_admin('ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid, '8d99f216-1454-4500-9652-f87922774f5c'::uuid)
+        is_coach_or_admin('<TEAM_ID>'::uuid, '<USER_ID>'::uuid)
         AND true
     ) AS policy_should_allow_insert
 FROM team_members tm
-WHERE tm.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid
-AND tm.user_id != '8d99f216-1454-4500-9652-f87922774f5c'::uuid  -- Exclude coach
+WHERE tm.team_id = '<TEAM_ID>'::uuid
+AND tm.user_id != '<USER_ID>'::uuid  -- Exclude coach
 ORDER BY tm.role, tm.user_id;
 

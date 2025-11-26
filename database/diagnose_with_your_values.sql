@@ -1,6 +1,6 @@
 -- Diagnostic Queries with Your Actual Values
--- Team ID: ddced7b8-e45b-45f9-ac31-96b2045f40e8
--- Coach User ID: 8d99f216-1454-4500-9652-f87922774f5c
+-- Team ID: <TEAM_ID>
+-- Coach User ID: <USER_ID>
 
 -- Step 1: Check if the function exists
 SELECT 
@@ -25,11 +25,11 @@ AND cmd = 'INSERT';
 -- Step 3: Test the function with your coach user
 SELECT 
     'Function test' AS check_type,
-    '8d99f216-1454-4500-9652-f87922774f5c'::uuid AS coach_user_id,
-    'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid AS team_id,
+    '<USER_ID>'::uuid AS coach_user_id,
+    '<TEAM_ID>'::uuid AS team_id,
     is_coach_or_admin(
-        'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid,
-        '8d99f216-1454-4500-9652-f87922774f5c'::uuid
+        '<TEAM_ID>'::uuid,
+        '<USER_ID>'::uuid
     ) AS function_returns_true;
 
 -- Step 4: Check coach's roles in both tables
@@ -40,8 +40,8 @@ SELECT
     team_id,
     user_id
 FROM team_member_roles
-WHERE team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid
-AND user_id = '8d99f216-1454-4500-9652-f87922774f5c'::uuid
+WHERE team_id = '<TEAM_ID>'::uuid
+AND user_id = '<USER_ID>'::uuid
 
 UNION ALL
 
@@ -52,8 +52,8 @@ SELECT
     team_id,
     user_id
 FROM team_members
-WHERE team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid
-AND user_id = '8d99f216-1454-4500-9652-f87922774f5c'::uuid;
+WHERE team_id = '<TEAM_ID>'::uuid
+AND user_id = '<USER_ID>'::uuid;
 
 -- Step 5: List all team members (to find player IDs)
 SELECT 
@@ -63,32 +63,32 @@ SELECT
     is_admin,
     team_id
 FROM team_members
-WHERE team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid
+WHERE team_id = '<TEAM_ID>'::uuid
 ORDER BY role, user_id;
 
 -- Step 6: Test RLS policy simulation for ALL players in the team
 -- This will show which players the policy would allow you to mark
 SELECT 
     'RLS Policy Simulation (All Players)' AS check_type,
-    '8d99f216-1454-4500-9652-f87922774f5c'::uuid AS coach_user_id,
+    '<USER_ID>'::uuid AS coach_user_id,
     tm.user_id AS player_user_id,
     tm.role AS player_role,
-    'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid AS team_id,
+    '<TEAM_ID>'::uuid AS team_id,
     -- Check 1: Is coach a coach/admin?
     is_coach_or_admin(
-        'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid,
-        '8d99f216-1454-4500-9652-f87922774f5c'::uuid
+        '<TEAM_ID>'::uuid,
+        '<USER_ID>'::uuid
     ) AS coach_check_passes,
     -- Check 2: Is player in team? (always true since we're querying team_members)
     true AS player_in_team,
     -- Final check: Both conditions must be true
     (
-        is_coach_or_admin('ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid, '8d99f216-1454-4500-9652-f87922774f5c'::uuid)
+        is_coach_or_admin('<TEAM_ID>'::uuid, '<USER_ID>'::uuid)
         AND true  -- Player is in team (we're querying from team_members)
     ) AS policy_should_allow_insert
 FROM team_members tm
-WHERE tm.team_id = 'ddced7b8-e45b-45f9-ac31-96b2045f40e8'::uuid
-AND tm.user_id != '8d99f216-1454-4500-9652-f87922774f5c'::uuid  -- Exclude coach
+WHERE tm.team_id = '<TEAM_ID>'::uuid
+AND tm.user_id != '<USER_ID>'::uuid  -- Exclude coach
 ORDER BY tm.role, tm.user_id;
 
 -- Step 7: Get exact policy definition

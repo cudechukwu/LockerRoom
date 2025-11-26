@@ -13,7 +13,7 @@
 When the app starts, you should see:
 ```
 ✅ SupabaseProvider: Session hydrated successfully
-  userId: 8d99f216-1454-4500-9652-f87922774f5c
+  userId: <USER_ID>
   hasAccessToken: true
   expiresAt: ...
 ```
@@ -25,9 +25,9 @@ When the app starts, you should see:
 4. Check the console logs - you should see:
 ```
 ✅ Check-in request authenticated:
-  userId: 8d99f216-1454-4500-9652-f87922774f5c
+  userId: <USER_ID>
   hasAccessToken: true
-  sessionUserId: 8d99f216-1454-4500-9652-f87922774f5c
+  sessionUserId: <USER_ID>
   match: true
 ```
 
@@ -46,7 +46,7 @@ SELECT
   status,
   checked_in_at
 FROM event_attendance
-WHERE user_id = '8d99f216-1454-4500-9652-f87922774f5c'
+WHERE user_id = '<USER_ID>'
 ORDER BY checked_in_at DESC
 LIMIT 5;
 ```

@@ -26,7 +26,7 @@ DO $$
 DECLARE
     -- Real user IDs from your auth.users table
     admin_user_id UUID := 'e0b53182-d8ca-491e-9a8c-f24db1ebd8df';
-    coach_user_id UUID := '8d99f216-1454-4500-9652-f87922774f5c';
+    coach_user_id UUID := '<USER_ID>';
     
     -- Team and channel IDs
     sample_team_id UUID;

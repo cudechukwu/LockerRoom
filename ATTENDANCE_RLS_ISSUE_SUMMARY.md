@@ -14,9 +14,9 @@ ERROR: 42501: new row violates row-level security policy for table "event_attend
 - ❌ RLS policy still blocks the INSERT operation
 
 ## User IDs
-- **Current User (Coach)**: `8d99f216-1454-4500-9652-f87922774f5c`
+- **Current User (Coach)**: `<USER_ID>`
 - **Target User (Being Marked)**: `e163e9b2-55ea-49aa-a8e7-3c83bf550d74` (Chiamaka)
-- **Team ID**: `ddced7b8-e45b-45f9-ac31-96b2045f40e8`
+- **Team ID**: `<TEAM_ID>`
 
 ## Relevant Files
 
@@ -110,12 +110,12 @@ CREATE POLICY "Coaches insert team attendance" ON event_attendance
 ## Debug Logs from App
 ```
 LOG  🔍 Manual check-in attempt: {
-  "currentUserId": "8d99f216-1454-4500-9652-f87922774f5c",
-  "sessionUserId": "8d99f216-1454-4500-9652-f87922774f5c",
+  "currentUserId": "<USER_ID>",
+  "sessionUserId": "<USER_ID>",
   "hasSession": true,
   "hasAccessToken": true,
   "targetUserId": "e163e9b2-55ea-49aa-a8e7-3c83bf550d74",
-  "teamId": "ddced7b8-e45b-45f9-ac31-96b2045f40e8"
+  "teamId": "<TEAM_ID>"
 }
 ERROR  🚨 RLS Policy Violation: {
   "code": "42501",

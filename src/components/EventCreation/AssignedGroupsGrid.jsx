@@ -1,15 +1,15 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import React, { memo } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../constants/colors';
 import { TYPOGRAPHY, FONT_SIZES, FONT_WEIGHTS, scaleFont } from '../../constants/typography';
 
 /**
  * Assigned Groups Grid
- * Visual grid of checkboxes for selecting groups
+ * List-based design for selecting groups (similar to recurring dropdown)
  * Only shown when "Specific group(s)" is selected
  */
-const AssignedGroupsGrid = ({ 
+const AssignedGroupsGrid = memo(({ 
   selectedGroups = [], 
   availableGroups = [],
   onToggleGroup,
@@ -18,12 +18,8 @@ const AssignedGroupsGrid = ({
   if (availableGroups.length === 0) {
     return (
       <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Assigned Groups</Text>
-          <Text style={styles.headerCount}>0 selected</Text>
-        </View>
         <View style={styles.emptyState}>
-          <Ionicons name="people-outline" size={32} color={COLORS.TEXT_TERTIARY} />
+          <Ionicons name="people-outline" size={24} color={COLORS.TEXT_TERTIARY} />
           <Text style={styles.emptyStateText}>
             No groups available.{'\n'}
             Create groups in Attendance Groups.
@@ -33,8 +29,6 @@ const AssignedGroupsGrid = ({
     );
   }
 
-  const numColumns = 3; // 3 columns on most screens, adjust for smaller screens if needed
-
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -43,52 +37,40 @@ const AssignedGroupsGrid = ({
           {selectedGroups.length} {selectedGroups.length === 1 ? 'selected' : 'selected'}
         </Text>
       </View>
-
-      <View style={styles.grid}>
+      <View style={styles.groupsList}>
         {availableGroups.map((group, index) => {
           const isSelected = selectedGroups.includes(group.id);
-          const row = Math.floor(index / 3);
-          const col = index % 3;
           return (
             <TouchableOpacity
               key={group.id}
               style={[
-                styles.groupCard,
-                col > 0 && styles.groupCardSpacing,
-                row > 0 && styles.groupCardTopSpacing,
-                isSelected && {
-                  backgroundColor: COLORS.ICON_BACKGROUND_HOME,
-                  borderColor: COLORS.ICON_BACKGROUND_HOME,
-                },
+                styles.groupOption,
+                isSelected && styles.groupOptionSelected,
+                index === availableGroups.length - 1 && styles.groupOptionLast,
               ]}
               onPress={() => onToggleGroup(group.id)}
               activeOpacity={0.7}
             >
-              <View style={styles.checkboxContainer}>
-                {isSelected && (
-                  <Ionicons name="checkmark" size={16} color={COLORS.WHITE} />
-                )}
-              </View>
-              <Text
-                style={[
-                  styles.groupName,
-                  isSelected && styles.groupNameSelected,
-                ]}
-                numberOfLines={2}
-              >
+              <Text style={[
+                styles.groupOptionText,
+                isSelected && styles.groupOptionTextSelected
+              ]}>
                 {group.name}
               </Text>
+              {isSelected && (
+                <Ionicons name="checkmark" size={20} color={COLORS.TEXT_PRIMARY} />
+              )}
             </TouchableOpacity>
           );
         })}
       </View>
     </View>
   );
-};
+});
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 24,
+    marginBottom: 0,
   },
   header: {
     flexDirection: 'row',
@@ -98,66 +80,58 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     ...TYPOGRAPHY.sectionTitle,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    fontWeight: FONT_WEIGHTS.BOLD,
+    color: COLORS.TEXT_PRIMARY,
   },
   headerCount: {
     ...TYPOGRAPHY.caption,
     color: COLORS.TEXT_TERTIARY,
   },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  groupCard: {
-    width: '31%', // 3 columns with spacing
-    aspectRatio: 1.2,
-    backgroundColor: COLORS.BACKGROUND_CARD,
+  groupsList: {
     borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.05)',
-    padding: 12,
+    overflow: 'hidden',
+  },
+  groupOption: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
   },
-  groupCardSpacing: {
-    marginLeft: '3.5%', // Space between columns
+  groupOptionSelected: {
+    backgroundColor: COLORS.BACKGROUND_CARD,
   },
-  groupCardTopSpacing: {
-    marginTop: 8, // Space between rows
+  groupOptionLast: {
+    borderBottomWidth: 0,
   },
-  checkboxContainer: {
-    width: 20,
-    height: 20,
-    borderRadius: 4,
-    borderWidth: 2,
-    borderColor: COLORS.TEXT_TERTIARY,
-    marginBottom: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'transparent',
+  groupOptionText: {
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    color: COLORS.TEXT_PRIMARY,
   },
-  groupName: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.TEXT_SECONDARY,
-    textAlign: 'center',
+  groupOptionTextSelected: {
     fontWeight: FONT_WEIGHTS.MEDIUM,
-  },
-  groupNameSelected: {
-    color: COLORS.WHITE,
-    fontWeight: FONT_WEIGHTS.SEMIBOLD,
   },
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 32,
+    paddingVertical: 24,
   },
   emptyStateText: {
     ...TYPOGRAPHY.body,
     fontSize: scaleFont(FONT_SIZES.SM),
     color: COLORS.TEXT_TERTIARY,
     textAlign: 'center',
-    marginTop: 12,
+    marginTop: 8,
   },
 });
+
+AssignedGroupsGrid.displayName = 'AssignedGroupsGrid';
 
 export default AssignedGroupsGrid;
 

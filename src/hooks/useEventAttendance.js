@@ -17,12 +17,13 @@ import { calculateAttendanceStats, getUserAttendanceStatus } from '../services/a
 
 /**
  * Hook to fetch event attendance data and stats
- * @param {string|null} eventId - Event ID
+ * @param {string|null} eventId - Event ID (can be instanceId for recurring events)
  * @param {boolean} enabled - Whether to enable the query
  * @param {boolean} includeStats - Whether to calculate stats (for coaches/creators)
+ * @param {string|null} instanceDate - Instance date (YYYY-MM-DD) for recurring events
  * @returns {Object} React Query result with attendance, stats, userAttendance, isLoading, error
  */
-export const useEventAttendance = (eventId, enabled = true, includeStats = false) => {
+export const useEventAttendance = (eventId, enabled = true, includeStats = false, instanceDate = null) => {
   const supabase = useSupabase();
   const shouldFetch = enabled && !!eventId;
   const [currentUser, setCurrentUser] = useState(null);
@@ -49,7 +50,7 @@ export const useEventAttendance = (eventId, enabled = true, includeStats = false
       if (!supabase) {
         throw new Error('Supabase client not available');
       }
-      const { data: attendance, error } = await getEventAttendance(supabase, eventId);
+      const { data: attendance, error } = await getEventAttendance(supabase, eventId, { instanceDate });
       if (error) {
         throw error;
       }

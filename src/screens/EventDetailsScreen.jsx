@@ -21,26 +21,24 @@ import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native';
 import { Portal } from '@gorhom/portal';
 import { COLORS } from '../constants/colors';
-import AttendanceList from '../components/AttendanceList';
-import EventHero from '../components/EventDetails/EventHero';
-import EventDetailsCard from '../components/EventDetails/EventDetailsCard';
-import AttachmentsCard from '../components/EventDetails/AttachmentsCard';
-import NotesCard from '../components/EventDetails/NotesCard';
-import CheckInSection from '../components/EventDetails/CheckInSection';
 import CoachActions from '../components/EventDetails/CoachActions';
-import AttendanceSummary from '../components/EventDetails/AttendanceSummary';
 import SkeletonEventDetails from '../components/EventDetails/SkeletonEventDetails';
 import ErrorState from '../components/EventDetails/ErrorState';
 import DocumentViewer from '../components/DocumentViewer';
+// Renderer components for FlatList items (Issue 8: Split switch cases)
+import HeroRenderer from '../components/EventDetails/Renderers/HeroRenderer';
+import DetailsRenderer from '../components/EventDetails/Renderers/DetailsRenderer';
+import NotesRenderer from '../components/EventDetails/Renderers/NotesRenderer';
+import AttachmentsRenderer from '../components/EventDetails/Renderers/AttachmentsRenderer';
+import CheckInRenderer from '../components/EventDetails/Renderers/CheckInRenderer';
+import AttendanceSummaryRenderer from '../components/EventDetails/Renderers/AttendanceSummaryRenderer';
+import AttendanceListRenderer from '../components/EventDetails/Renderers/AttendanceListRenderer';
 // Lazy load QR components (heavy camera/GPU usage)
 const QRCodeScanner = React.lazy(() => import('../components/QRCodeScanner'));
 const QRCodeGenerator = React.lazy(() => import('../components/QRCodeGenerator'));
 import { useEventDetailsScreenController } from '../hooks/useEventDetailsScreenController';
 import { useHandleQRScan } from '../hooks/useHandleQRScan';
-import { deleteEvent } from '../api/events';
-import { useSupabase } from '../providers/SupabaseProvider';
-import { useQueryClient } from '@tanstack/react-query';
-import { queryKeys } from '../hooks/queryKeys';
+import { getInstanceDate } from '../utils/eventInstanceUtils';
 
 // Plain function outside component - avoids hook overhead and hoisting issues
 const noop = () => {};
@@ -48,8 +46,6 @@ const noop = () => {};
 const EventDetailsScreen = ({ route, navigation }) => {
   const { event: eventParam, teamId, qrScanData } = route.params || {};
   const insets = useSafeAreaInsets();
-  const supabase = useSupabase();
-  const queryClient = useQueryClient();
   const [isFocused, setIsFocused] = React.useState(true);
 
   // Track focus state for controller
@@ -62,7 +58,7 @@ const EventDetailsScreen = ({ route, navigation }) => {
 
   // Use enhanced controller (handles event conversion, QR state, viewer state)
   // IMPORTANT: All hooks must be called unconditionally - no early returns before this
-  const controllerResult = useEventDetailsScreenController(eventParam, teamId, isFocused, qrScanData);
+  const controllerResult = useEventDetailsScreenController(eventParam, teamId, isFocused, qrScanData, navigation);
   const {
     loading,
     error,
@@ -95,17 +91,136 @@ const EventDetailsScreen = ({ route, navigation }) => {
           date: event.date?.toISOString(),
         }
       });
-      // Add small delay to avoid race condition where navigation happens while screen is animating
-      setTimeout(() => {
+      // Use requestAnimationFrame for smoother navigation (replaces setTimeout hack)
+      requestAnimationFrame(() => {
         navigation.goBack();
-      }, 50);
+      });
     }
   }, [event, navigation]);
 
-  // Handle delete - handle directly in this screen
+  /**
+   * Event ID handling:
+   * - For recurring instances: event.id = instanceId (format: "uuid:YYYY-MM-DD")
+   * - For non-recurring: event.id = original event UUID
+   * - event.originalEventId = always the original UUID (even for instances)
+   * 
+   * Usage:
+   * - Attendance queries: Use originalEventId (they handle instanceDate separately)
+   * - QR codes: Use originalEventId
+   * - Display: Use event.id (works for both)
+   */
+  const isRecurringInstance = event?.isRecurringInstance && event?.originalEventId;
+  const isRecurringSeries = event?.is_recurring && !event?.isRecurringInstance;
+  const originalEventId = event?.originalEventId || event?.id;
+  
+  // Debug logging
+  if (__DEV__) {
+    console.log('🔍 EventDetailsScreen - Event deletion context:', {
+      eventId: event?.id,
+      isRecurringInstance,
+      isRecurringSeries,
+      originalEventId,
+      is_recurring: event?.is_recurring,
+      hasOriginalEventId: !!event?.originalEventId,
+    });
+  }
+
+  // Handle delete - simplified using controller functions
   const handleDelete = useCallback(async () => {
-    if (!event || !supabase) return;
+    if (!event || !actions) return;
     
+    // If it's a recurring instance, show options
+    if (isRecurringInstance) {
+      Alert.alert(
+        'Delete Recurring Event',
+        `"${event.title}" is part of a recurring series. What would you like to delete?`,
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel'
+          },
+          {
+            text: 'This occurrence only',
+            onPress: async () => {
+              // Use getInstanceDate utility to get correct instance date
+              const instanceDate = getInstanceDate(event);
+              if (!instanceDate) {
+                Alert.alert('Error', 'Unable to determine instance date. Please try again.');
+                return;
+              }
+              
+              const result = await actions.deleteInstance(originalEventId, instanceDate);
+              if (!result.success) {
+                Alert.alert(
+                  'Error', 
+                  result.error?.message || 'Failed to delete this occurrence. Please try again.'
+                );
+              }
+            }
+          },
+          {
+            text: 'All occurrences',
+            style: 'destructive',
+            onPress: async () => {
+              Alert.alert(
+                'Delete All Occurrences',
+                `Are you sure you want to delete all occurrences of "${event.title}"? This cannot be undone.`,
+                [
+                  {
+                    text: 'Cancel',
+                    style: 'cancel'
+                  },
+                  {
+                    text: 'Delete All',
+                    style: 'destructive',
+                    onPress: async () => {
+                      const result = await actions.deleteSeries(originalEventId);
+                      if (!result.success) {
+                        Alert.alert(
+                          'Error', 
+                          result.error?.message || 'Failed to delete event. Please try again.'
+                        );
+                      }
+                    }
+                  }
+                ]
+              );
+            }
+          }
+        ]
+      );
+      return;
+    }
+    
+    // If it's a recurring series (original event), show confirmation
+    if (isRecurringSeries) {
+      Alert.alert(
+        'Delete Recurring Event',
+        `Are you sure you want to delete all occurrences of "${event.title}"? This cannot be undone.`,
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel'
+          },
+          {
+            text: 'Delete All',
+            style: 'destructive',
+            onPress: async () => {
+              const result = await actions.deleteSeries(originalEventId);
+              if (!result.success) {
+                Alert.alert(
+                  'Error', 
+                  result.error?.message || 'Failed to delete event. Please try again.'
+                );
+              }
+            }
+          }
+        ]
+      );
+      return;
+    }
+    
+    // Non-recurring event
     Alert.alert(
       'Delete Event',
       `Are you sure you want to delete "${event.title}"?`,
@@ -118,28 +233,18 @@ const EventDetailsScreen = ({ route, navigation }) => {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            try {
-              const { success, error: deleteError } = await deleteEvent(supabase, event.id);
-              
-              if (deleteError) {
-                Alert.alert('Error', 'Failed to delete event. Please try again.');
-                return;
-              }
-              
-              // Invalidate event caches
-              queryClient.invalidateQueries({ queryKey: queryKeys.events(teamId) });
-              queryClient.invalidateQueries({ queryKey: queryKeys.event(event.id) });
-              
-              // Navigate back
-              navigation.goBack();
-            } catch (err) {
-              Alert.alert('Error', 'Failed to delete event. Please try again.');
+            const result = await actions.deleteSingle(event.id);
+            if (!result.success) {
+              Alert.alert(
+                'Error', 
+                result.error?.message || 'Failed to delete event. Please try again.'
+              );
             }
           }
         }
       ]
     );
-  }, [event, supabase, teamId, queryClient, navigation]);
+  }, [event, actions, isRecurringInstance, isRecurringSeries, originalEventId]);
 
   // Handle close (navigation back)
   const handleClose = useCallback(() => {
@@ -228,7 +333,8 @@ const EventDetailsScreen = ({ route, navigation }) => {
           id: 'attendance-list',
           type: 'attendance-list',
           data: {
-            eventId: event.id,
+            eventId: event.originalEventId || event.id, // Use originalEventId for attendance queries
+            instanceDate: event.instanceDate, // Pass instanceDate for recurring instances
             teamId,
             isCoach: permissions?.isCoach,
             event,
@@ -242,65 +348,35 @@ const EventDetailsScreen = ({ route, navigation }) => {
 
   const sectionsList = React.useMemo(() => renderSections(), [renderSections]);
 
-  // Render section item - memoized to prevent unnecessary re-renders
+  // Renderer map for switch cases (Issue 8: Split switch cases for better readability)
+  const RENDERERS = {
+    hero: HeroRenderer,
+    details: DetailsRenderer,
+    notes: NotesRenderer,
+    attachments: AttachmentsRenderer,
+    checkin: CheckInRenderer,
+    'attendance-summary': AttendanceSummaryRenderer,
+    'attendance-list': AttendanceListRenderer,
+  };
+
+  // Render section item - memoized to prevent unnecessary re-renders (Issue 4: Stable renderItem)
   // MUST be called before early returns to maintain hooks order
   const renderItem = useCallback(({ item }) => {
-    switch (item.type) {
-      case 'hero':
-        return (
-          <EventHero
-            event={item.data.event}
-            creatorName={item.data.creatorName}
-            onClose={item.data.handleClose}
-            onEdit={item.data.handleEdit}
-            onDelete={item.data.handleDelete}
-            canEdit={item.data.permissions?.isEventCreator}
-            canDelete={item.data.permissions?.isEventCreator}
-          />
-        );
-      case 'details':
-        return <EventDetailsCard event={item.data.event} />;
-      case 'notes':
-        return <NotesCard notes={item.data.notes} />;
-      case 'attachments':
-        return (
-          <AttachmentsCard
-            computedAttachments={item.data.attachments}
-            isLoading={loading?.isLoadingAttachments}
-            onAttachmentPress={item.data.onPress}
-          />
-        );
-      case 'checkin':
-        return (
-          <CheckInSection
-            {...item.data}
-            onCheckInQR={actions?.openQRScanner || noop}
-          />
-        );
-      case 'attendance-summary':
-        return (
-          <View style={styles.sectionContainer}>
-            <AttendanceSummary
-              stats={item.data.stats}
-              totalMembers={item.data.totalMembers}
-            />
-          </View>
-        );
-      case 'attendance-list':
-        return (
-          <View style={styles.sectionContainer}>
-            <AttendanceList
-              eventId={item.data.eventId}
-              teamId={item.data.teamId}
-              isCoach={item.data.isCoach}
-              event={item.data.event}
-              scrollEnabled={false} // Parent FlatList handles scrolling
-            />
-          </View>
-        );
-      default:
-        return null;
+    const Renderer = RENDERERS[item.type];
+    if (!Renderer) return null;
+    
+    // For attachments, include loading state
+    if (item.type === 'attachments') {
+      return <Renderer {...item.data} isLoading={loading?.isLoadingAttachments} />;
     }
+    
+    // For checkin, include QR scanner action
+    if (item.type === 'checkin') {
+      return <Renderer {...item.data} onCheckInQR={actions?.openQRScanner || noop} />;
+    }
+    
+    // For all other types, just pass the data
+    return <Renderer {...item.data} />;
   }, [loading?.isLoadingAttachments, actions]);
 
   // Bottom bar height for padding
@@ -390,6 +466,7 @@ const EventDetailsScreen = ({ route, navigation }) => {
             onScanSuccess={actions?.handleQRScanSuccess || noop}
             eventId={event.id}
             teamId={teamId}
+            instanceDate={event.instanceDate || null}
           />
         </React.Suspense>
       )}
@@ -402,6 +479,8 @@ const EventDetailsScreen = ({ route, navigation }) => {
             onClose={actions?.closeQRGenerator || noop}
             eventId={event.id}
             eventName={event.title}
+            instanceDate={event.instanceDate || null}
+            instanceEndTime={event.endTime || null}
           />
         </React.Suspense>
       )}

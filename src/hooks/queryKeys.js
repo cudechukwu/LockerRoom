@@ -27,6 +27,9 @@ export const queryKeys = {
   calendarEvents: (teamId, view, date) => ['calendarEvents', teamId, view, date],
   upcomingEvents: (teamId) => ['upcomingEvents', teamId],
   teamColors: (teamId) => ['teamColors', teamId],
+  // Event system keys (for invalidation)
+  events: (teamId) => ['events', teamId], // General events query key for team
+  event: (eventId) => ['event', eventId], // Specific event query key
   userTeamMembership: (userId) => ['userTeamMembership', userId],
   // Calling system keys
   callSession: (callSessionId) => ['callSession', callSessionId],

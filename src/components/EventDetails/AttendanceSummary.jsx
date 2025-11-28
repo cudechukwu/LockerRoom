@@ -12,6 +12,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { COLORS } from '../../constants/colors';
 import { TYPOGRAPHY, FONT_SIZES, FONT_WEIGHTS, scaleFont } from '../../constants/typography';
+import GradientCard from '../EventCreation/GradientCard';
 
 const AttendanceSummary = ({ stats = {}, totalMembers = 0 }) => {
   const present = stats.present || 0;
@@ -24,7 +25,7 @@ const AttendanceSummary = ({ stats = {}, totalMembers = 0 }) => {
   const absent = Math.max(0, totalMembers - checkedInCount);
 
   return (
-    <View style={styles.container}>
+    <GradientCard>
       <Text style={styles.title}>Attendance</Text>
       <View style={styles.divider} />
       <View style={styles.statsRow}>
@@ -41,22 +42,15 @@ const AttendanceSummary = ({ stats = {}, totalMembers = 0 }) => {
           <Text style={styles.statLabel}>Absent</Text>
         </View>
       </View>
-    </View>
+    </GradientCard>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    backgroundColor: COLORS.BACKGROUND_PRIMARY,
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
   title: {
-    ...TYPOGRAPHY.title,
-    fontSize: scaleFont(FONT_SIZES.BASE),
-    fontWeight: FONT_WEIGHTS.SEMIBOLD,
+    ...TYPOGRAPHY.sectionTitle,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    fontWeight: FONT_WEIGHTS.BOLD,
     color: COLORS.TEXT_PRIMARY,
     marginBottom: 12,
   },
@@ -73,8 +67,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statNumber: {
-    ...TYPOGRAPHY.heading,
-    fontSize: scaleFont(FONT_SIZES['2XL']),
+    ...TYPOGRAPHY.h1,
+    fontSize: scaleFont(FONT_SIZES.XXL),
     fontWeight: FONT_WEIGHTS.BOLD,
     color: COLORS.TEXT_PRIMARY,
     marginBottom: 4,

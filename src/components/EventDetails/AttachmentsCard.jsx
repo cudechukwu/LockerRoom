@@ -16,6 +16,7 @@ import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'rea
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../constants/colors';
 import { TYPOGRAPHY, FONT_SIZES, FONT_WEIGHTS, scaleFont } from '../../constants/typography';
+import GradientCard from '../EventCreation/GradientCard';
 
 const AttachmentsCard = ({
   computedAttachments = [],
@@ -24,12 +25,12 @@ const AttachmentsCard = ({
 }) => {
   if (isLoading) {
     return (
-      <View style={styles.card}>
+      <GradientCard>
         <View style={styles.loadingRow}>
           <ActivityIndicator size="small" color={COLORS.TEXT_SECONDARY} />
           <Text style={styles.loadingText}>Loading attachments...</Text>
         </View>
-      </View>
+      </GradientCard>
     );
   }
 
@@ -38,7 +39,7 @@ const AttachmentsCard = ({
   }
 
   return (
-    <View style={styles.card}>
+    <GradientCard>
       <Text style={styles.cardTitle}>Attachments</Text>
       <View style={styles.attachmentsList}>
         {computedAttachments.map((attachment, index) => {
@@ -89,26 +90,17 @@ const AttachmentsCard = ({
           );
         })}
       </View>
-    </View>
+    </GradientCard>
   );
 };
 
 const styles = StyleSheet.create({
-  card: {
-    backgroundColor: COLORS.BACKGROUND_PRIMARY,
-    borderRadius: 16,
-    padding: 20,
-    marginHorizontal: 20,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
   cardTitle: {
-    ...TYPOGRAPHY.title,
-    fontSize: scaleFont(FONT_SIZES.LG),
-    fontWeight: FONT_WEIGHTS.SEMIBOLD,
+    ...TYPOGRAPHY.sectionTitle,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    fontWeight: FONT_WEIGHTS.BOLD,
     color: COLORS.TEXT_PRIMARY,
-    marginBottom: 16,
+    marginBottom: 12,
   },
   loadingRow: {
     flexDirection: 'row',
@@ -117,7 +109,7 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     ...TYPOGRAPHY.body,
-    fontSize: scaleFont(FONT_SIZES.BASE),
+    fontSize: scaleFont(FONT_SIZES.SM),
     color: COLORS.TEXT_SECONDARY,
   },
   attachmentsList: {
@@ -151,7 +143,7 @@ const styles = StyleSheet.create({
   },
   attachmentFileName: {
     ...TYPOGRAPHY.body,
-    fontSize: scaleFont(FONT_SIZES.BASE),
+    fontSize: scaleFont(FONT_SIZES.SM),
     fontWeight: FONT_WEIGHTS.REGULAR,
     color: COLORS.TEXT_PRIMARY,
     flex: 1,

@@ -47,7 +47,7 @@ export default function SkeletonEventDetails() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.BACKGROUND_CARD,
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
     paddingTop: 60,
   },
   header: {

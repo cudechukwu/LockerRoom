@@ -50,12 +50,6 @@ const WhoSeesThisSection = ({
                   styles.radioButton,
                   isSelected && styles.radioButtonSelected,
                 ]}>
-                  {isSelected && (
-                    <View style={[
-                      styles.radioButtonInner,
-                      { backgroundColor: COLORS.ICON_BACKGROUND_HOME }
-                    ]} />
-                  )}
                 </View>
               </View>
               
@@ -96,7 +90,7 @@ const WhoSeesThisSection = ({
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 16,
+    marginBottom: 0,
   },
   sectionTitle: {
     ...TYPOGRAPHY.sectionTitle,
@@ -112,7 +106,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 8,
     paddingHorizontal: 8,
-    borderRadius: 30,
+    borderRadius: 13,
     backgroundColor: COLORS.BACKGROUND_CARD,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.05)',
@@ -137,17 +131,12 @@ const styles = StyleSheet.create({
     height: 12,
     borderRadius: 6,
     borderWidth: 1.5,
-    borderColor: COLORS.TEXT_TERTIARY,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   radioButtonSelected: {
-    borderColor: COLORS.PRIMARY,
-  },
-  radioButtonInner: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    borderColor: 'rgba(255, 255, 255, 0.6)',
   },
   optionLabel: {
     ...TYPOGRAPHY.caption,

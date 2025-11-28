@@ -65,7 +65,7 @@ const styles = StyleSheet.create({
   tab: {
     paddingHorizontal: 14,
     paddingVertical: 6,
-    borderRadius: 20,
+    borderRadius: 13,
     backgroundColor: COLORS.BACKGROUND_CARD,
     marginRight: 8,
   },

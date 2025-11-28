@@ -22,7 +22,7 @@ import { useMarkAttendance } from '../hooks/useMarkAttendance';
 import { sortMembersByAttendance, getStatusLabel } from '../services/attendanceService';
 import AttendanceRow, { ITEM_HEIGHT } from './Attendance/AttendanceRow';
 
-function AttendanceList({ eventId, teamId, isCoach = false, event = null, scrollEnabled = true }) {
+function AttendanceList({ eventId, instanceDate, teamId, isCoach = false, event = null, scrollEnabled = true }) {
   // Selection state for bulk actions - use ref to prevent wasteful re-renders
   // INVARIANT: selectedPlayersRef is the source of truth, but we must always call
   // setSelectedPlayers() after mutating the ref to keep UI in sync
@@ -33,7 +33,8 @@ function AttendanceList({ eventId, teamId, isCoach = false, event = null, scroll
   const { filteredMembers, isLoading: isLoadingMembers } = useTeamMembers(teamId, event);
 
   // Fetch attendance data (with real-time updates)
-  const { attendance, attendanceByUserId, isLoading: isLoadingAttendance } = useAttendance(eventId, !!eventId);
+  // Pass instanceDate to useAttendance for recurring event instances
+  const { attendance, attendanceByUserId, isLoading: isLoadingAttendance } = useAttendance(eventId, !!eventId, instanceDate);
 
   // Mark attendance hook
   const { markAttendance, bulkMarkAttendance, isMarking, markingUserId } = useMarkAttendance(eventId, teamId);

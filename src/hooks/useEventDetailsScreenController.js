@@ -18,12 +18,15 @@ import { useEventRole } from './useEventRole';
 import { useEventCreator } from './useEventCreator';
 import { useEventAttendance } from './useEventAttendance';
 import { useEventCheckIn } from './useEventCheckIn';
+import { useRealtimeAttendance } from './useRealtimeAttendance';
 import { useSupabase } from '../providers/SupabaseProvider';
 import { mapCheckInError, mapRoleError, mapCreatorError, mapAttendanceError } from '../utils/errorMap';
 import { queryKeys } from './queryKeys';
 import { useQuery } from '@tanstack/react-query';
-import { getEventAttachments } from '../api/events';
+import { getEventAttachments, deleteEvent, deleteRecurringInstance } from '../api/events';
 import { useAttachments } from './useAttachments';
+import { refreshCalendar } from '../utils/refreshCalendar';
+import { getInstanceDate } from '../utils/eventInstanceUtils';
 
 /**
  * Enhanced controller for EventDetailsScreen
@@ -33,7 +36,7 @@ import { useAttachments } from './useAttachments';
  * @param {string|null} qrScanData - QR scan data from navigation
  * @returns {Object} Complete screen state and actions
  */
-export function useEventDetailsScreenController(eventParam, teamId, isFocused = true, qrScanData = null) {
+export function useEventDetailsScreenController(eventParam, teamId, isFocused = true, qrScanData = null, navigation = null) {
   const queryClient = useQueryClient();
   const supabase = useSupabase();
   const abortControllerRef = useRef(null);
@@ -46,11 +49,30 @@ export function useEventDetailsScreenController(eventParam, teamId, isFocused = 
     const startTimeDate = eventParam.startTime ? new Date(eventParam.startTime) : null;
     const endTimeDate = eventParam.endTime ? new Date(eventParam.endTime) : null;
     
+    // Extract instanceDate for recurring event instances
+    // If event has instanceDate, use it; otherwise, extract from instanceId or startTime
+    let instanceDate = eventParam.instanceDate || null;
+    if (!instanceDate && eventParam.isRecurringInstance && startTimeDate) {
+      // Extract date from instance (YYYY-MM-DD format)
+      const date = new Date(startTimeDate);
+      date.setHours(0, 0, 0, 0);
+      instanceDate = date.toISOString().split('T')[0];
+    }
+    
+    // For recurring instances, use instanceId as the id (if available)
+    // This ensures QR codes and attendance use the correct instance-specific ID
+    const eventId = eventParam.instanceId || eventParam.id;
+    // Preserve originalEventId for operations that need the original event (like attachments)
+    const originalEventId = eventParam.originalEventId || eventParam.id;
+    
     return {
       ...eventParam,
+      id: eventId, // Use instanceId for recurring instances, original id for non-recurring
+      originalEventId, // Always preserve original event ID for database operations
       startTime: startTimeDate && !isNaN(startTimeDate.getTime()) ? startTimeDate : null,
       endTime: endTimeDate && !isNaN(endTimeDate.getTime()) ? endTimeDate : null,
       date: startTimeDate && !isNaN(startTimeDate.getTime()) ? startTimeDate : null,
+      instanceDate, // YYYY-MM-DD format for recurring instances
     };
   }, [eventParam]);
   
@@ -131,6 +153,9 @@ export function useEventDetailsScreenController(eventParam, teamId, isFocused = 
   } = useEventCreator(event?.createdBy, isFocused && !!event?.createdBy);
 
   // 3. Attendance Data
+  // Extract instanceDate for recurring event instances
+  const instanceDate = event?.instanceDate || null;
+  
   const {
     attendance,
     userAttendance,
@@ -140,18 +165,22 @@ export function useEventDetailsScreenController(eventParam, teamId, isFocused = 
   } = useEventAttendance(
     event?.id,
     isFocused && !!teamId && !!event?.id,
-    (isCoach || isEventCreator) && roleChecked
+    (isCoach || isEventCreator) && roleChecked,
+    instanceDate
   );
 
   // 4. Attachments Data
+  // Use originalEventId for attachments (attachments are stored against original event, not instances)
+  const originalEventId = event?.originalEventId || event?.id;
+  
   const {
     data: attachmentsData,
     isLoading: isLoadingAttachments,
     error: attachmentsError,
   } = useQuery({
-    queryKey: ['event-attachments', event?.id],
-    queryFn: () => getEventAttachments(supabase, event.id),
-    enabled: isFocused && !!event?.id && !!supabase,
+    queryKey: ['event-attachments', originalEventId],
+    queryFn: () => getEventAttachments(supabase, originalEventId),
+    enabled: isFocused && !!originalEventId && !!supabase,
     staleTime: 5 * 60 * 1000,
   });
 
@@ -172,12 +201,29 @@ export function useEventDetailsScreenController(eventParam, teamId, isFocused = 
   }, [computedAttachments]);
 
   // 6. Check-in/out mutations
+  // Extract instanceDate for recurring event instances (same as above)
   const {
     checkInQR,
     checkInLocation,
     checkOut,
     isLoading: isCheckingIn,
-  } = useEventCheckIn(event?.id, teamId, abortControllerRef.current?.signal);
+  } = useEventCheckIn(event?.id, teamId, abortControllerRef.current?.signal, instanceDate);
+
+  // 7. Real-time attendance subscription
+  // Subscribe to attendance changes for this specific event instance
+  useRealtimeAttendance(
+    event?.id || null,
+    isFocused && !!event?.id,
+    instanceDate
+  );
+
+  // 7. Real-time attendance subscription
+  // Subscribe to attendance changes for this specific event instance
+  useRealtimeAttendance(
+    event?.id || null,
+    isFocused && !!event?.id,
+    instanceDate
+  );
 
   // 7. Centralized error handling
   useEffect(() => {
@@ -397,6 +443,101 @@ export function useEventDetailsScreenController(eventParam, teamId, isFocused = 
     setError(null);
   }, [event, teamId, queryClient]);
 
+  // Delete functions (Issue 1: Extract handleDelete into controller)
+  const deleteInstance = useCallback(async (originalEventId, instanceDate) => {
+    if (!supabase || !teamId || !navigation) {
+      return { success: false, error: new Error('Missing required dependencies') };
+    }
+
+    try {
+      // Convert instanceDate string (YYYY-MM-DD) to Date object if needed
+      const instanceDateObj = typeof instanceDate === 'string' 
+        ? new Date(instanceDate + 'T00:00:00') // Add time to avoid timezone issues
+        : instanceDate;
+      
+      console.log('🗑️ Deleting recurring instance:', {
+        originalEventId,
+        instanceDate: instanceDateObj,
+      });
+      
+      const { success, error: deleteError } = await deleteRecurringInstance(
+        supabase, 
+        originalEventId, 
+        instanceDateObj
+      );
+      
+      console.log('🗑️ Delete recurring instance result:', { success, error: deleteError });
+      
+      if (deleteError || !success) {
+        const errorMessage = deleteError?.message || deleteError?.toString() || 'Unknown error';
+        console.error('❌ Failed to delete recurring instance:', deleteError);
+        return { success: false, error: new Error(errorMessage) };
+      }
+      
+      // Refresh calendar and navigate back (Issue 2: Extract query invalidation)
+      await refreshCalendar(queryClient, teamId, originalEventId, navigation);
+      
+      return { success: true, error: null };
+    } catch (err) {
+      console.error('❌ Exception deleting recurring instance:', err);
+      return { success: false, error: err };
+    }
+  }, [supabase, teamId, queryClient, navigation]);
+
+  const deleteSeries = useCallback(async (originalEventId) => {
+    if (!supabase || !teamId || !navigation) {
+      return { success: false, error: new Error('Missing required dependencies') };
+    }
+
+    try {
+      console.log('🗑️ Deleting entire recurring series:', { originalEventId });
+      const { success, error: deleteError } = await deleteEvent(supabase, originalEventId);
+      
+      console.log('🗑️ Delete event result:', { success, error: deleteError });
+      
+      if (deleteError || !success) {
+        const errorMessage = deleteError?.message || deleteError?.toString() || 'Unknown error';
+        console.error('❌ Failed to delete event:', deleteError);
+        return { success: false, error: new Error(errorMessage) };
+      }
+      
+      // Refresh calendar and navigate back (Issue 2: Extract query invalidation)
+      await refreshCalendar(queryClient, teamId, originalEventId, navigation);
+      
+      return { success: true, error: null };
+    } catch (err) {
+      console.error('❌ Exception deleting event:', err);
+      return { success: false, error: err };
+    }
+  }, [supabase, teamId, queryClient, navigation]);
+
+  const deleteSingle = useCallback(async (eventId) => {
+    if (!supabase || !teamId || !navigation) {
+      return { success: false, error: new Error('Missing required dependencies') };
+    }
+
+    try {
+      console.log('🗑️ Deleting non-recurring event:', { eventId });
+      const { success, error: deleteError } = await deleteEvent(supabase, eventId);
+      
+      console.log('🗑️ Delete event result:', { success, error: deleteError });
+      
+      if (deleteError || !success) {
+        const errorMessage = deleteError?.message || deleteError?.toString() || 'Unknown error';
+        console.error('❌ Failed to delete event:', deleteError);
+        return { success: false, error: new Error(errorMessage) };
+      }
+      
+      // Refresh calendar and navigate back (Issue 2: Extract query invalidation)
+      await refreshCalendar(queryClient, teamId, eventId, navigation);
+      
+      return { success: true, error: null };
+    } catch (err) {
+      console.error('❌ Exception deleting event:', err);
+      return { success: false, error: err };
+    }
+  }, [supabase, teamId, queryClient, navigation]);
+
   return {
     // Data
     event,
@@ -427,8 +568,8 @@ export function useEventDetailsScreenController(eventParam, teamId, isFocused = 
       showQRGenerator,
     },
     
-    // Actions
-    actions: {
+    // Actions - memoized to ensure stability and prevent unnecessary re-renders
+    actions: useMemo(() => ({
       viewAttachment,
       closeViewer,
       openQRScanner,
@@ -438,8 +579,25 @@ export function useEventDetailsScreenController(eventParam, teamId, isFocused = 
       handleQRScanSuccess: handleQRScanSuccessWrapper,
       handleLocationCheckIn,
       handleCheckOut,
+      deleteInstance,
+      deleteSeries,
+      deleteSingle,
       retry,
-    },
+    }), [
+      viewAttachment,
+      closeViewer,
+      openQRScanner,
+      closeQRScanner,
+      openQRGenerator,
+      closeQRGenerator,
+      handleQRScanSuccessWrapper,
+      handleLocationCheckIn,
+      handleCheckOut,
+      deleteInstance,
+      deleteSeries,
+      deleteSingle,
+      retry,
+    ]),
   };
 }
 

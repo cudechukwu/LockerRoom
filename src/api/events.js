@@ -27,10 +27,10 @@ export async function getUpcomingEvents(supabaseClient, teamId, limit = 10) {
 
     if (error) throw error;
 
-    return { data: data || [], error: null };
+    return { data: data ?? [], error: null };
   } catch (error) {
     console.error('Error fetching upcoming events:', error);
-    return { data: null, error };
+    return { data: [], error };
   }
 }
 
@@ -128,27 +128,15 @@ export async function createEvent(supabaseClient, eventData) {
       .single();
 
     if (error) throw error;
-
-    // Populate expected attendees (trigger will also do this, but calling explicitly ensures it happens)
-    // Convert JSONB array to UUID array for the function
-    const assignedGroupIds = eventData.assigned_attendance_groups && Array.isArray(eventData.assigned_attendance_groups) && eventData.assigned_attendance_groups.length > 0
-      ? eventData.assigned_attendance_groups.map(id => typeof id === 'string' ? id : id.toString())
-      : null;
-
-    // Derive is_full_team_event from assigned_attendance_groups (empty = full team)
-    const isFullTeamEvent = !assignedGroupIds || assignedGroupIds.length === 0;
     
-    const { error: attendeesError } = await supabase.rpc('populate_event_expected_attendees', {
-      p_event_id: data.id,
-      p_team_id: eventData.team_id,
-      p_is_full_team_event: isFullTeamEvent,
-      p_assigned_group_ids: assignedGroupIds
-    });
-
-    if (attendeesError) {
-      console.warn('Warning: Could not populate expected attendees (trigger may handle it):', attendeesError);
-      // Don't fail event creation, just log the warning
+    // Check for RLS denial (data is null but no error)
+    if (!data && !error) {
+      throw new Error('RLS denied the request');
     }
+
+    // NOTE: Expected attendees are populated by database trigger automatically
+    // No need to call RPC explicitly - this prevents double-write hazards
+    // If trigger fails, it will be logged by the database
 
     return { data, error: null };
   } catch (error) {
@@ -188,9 +176,101 @@ export async function updateEvent(supabaseClient, eventId, updates) {
 }
 
 /**
- * Delete an event
+ * Delete a single instance of a recurring event
+ * Creates an exception record in the database to mark the instance as deleted
+ * 
  * @param {Object} supabaseClient - Supabase client instance (from useSupabase() hook)
- * @param {string} eventId - Event ID
+ * @param {string} originalEventId - Original event UUID
+ * @param {Date} instanceDate - Date of the instance to delete (local time)
+ * @returns {Promise<Object>} Success status and error info
+ */
+export async function deleteRecurringInstance(supabaseClient, originalEventId, instanceDate) {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+
+  try {
+    // Format date as YYYY-MM-DD (local time, not UTC)
+    const year = instanceDate.getFullYear();
+    const month = String(instanceDate.getMonth() + 1).padStart(2, '0');
+    const day = String(instanceDate.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
+
+    // Call RPC to create exception
+    console.log('🔧 Calling delete_recurring_instance RPC:', {
+      p_event_id: originalEventId,
+      p_exception_date: dateStr
+    });
+    
+    const { data, error } = await supabase.rpc('delete_recurring_instance', {
+      p_event_id: originalEventId,
+      p_exception_date: dateStr
+    });
+
+    console.log('🔧 RPC response:', { data, error });
+
+    if (error) {
+      console.error('❌ Error deleting recurring instance:', error);
+      // Check if RPC function doesn't exist (migration not run)
+      if (error.message && error.message.includes('function') && error.message.includes('does not exist')) {
+        throw new Error('Database migration not run. Please run the create_delete_recurring_instance_rpc.sql migration first.');
+      }
+      throw error;
+    }
+
+    return { success: true, data, error: null };
+  } catch (error) {
+    console.error('Error deleting recurring instance:', error);
+    return { success: false, data: null, error };
+  }
+}
+
+/**
+ * Get exceptions (deleted instances) for a recurring event
+ * Used to filter out deleted instances during frontend expansion
+ * 
+ * @param {Object} supabaseClient - Supabase client instance
+ * @param {string} eventId - Original event UUID
+ * @returns {Promise<Object>} Object with data (array of Date objects) and error
+ */
+export async function getEventExceptions(supabaseClient, eventId) {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+
+  try {
+    const { data, error } = await supabase.rpc('get_event_exceptions', {
+      p_event_id: eventId
+    });
+
+    if (error) {
+      console.error('Error fetching event exceptions:', error);
+      throw error;
+    }
+
+    // Convert date strings to Date objects (local time)
+    const deletedDates = (data || [])
+      .filter(exception => exception.exception_type === 'deleted')
+      .map(exception => {
+        const [year, month, day] = exception.exception_date.split('-').map(Number);
+        return new Date(year, month - 1, day); // Local time
+      });
+
+    return { data: deletedDates, error: null };
+  } catch (error) {
+    console.error('Error fetching event exceptions:', error);
+    return { data: [], error };
+  }
+}
+
+/**
+ * Delete an event (or entire recurring series)
+ * For recurring instances, use deleteRecurringInstance() instead
+ * 
+ * @param {Object} supabaseClient - Supabase client instance (from useSupabase() hook)
+ * @param {string} eventId - Event ID (original event UUID for recurring events)
  * @returns {Promise<Object>} Success status and error info
  */
 export async function deleteEvent(supabaseClient, eventId) {
@@ -199,8 +279,13 @@ export async function deleteEvent(supabaseClient, eventId) {
   }
   const supabase = supabaseClient;
   
+  // Validate eventId format - reject instanceId format (contains colon)
+  if (eventId && eventId.includes(':')) {
+    throw new Error('Cannot delete by instanceId. Use deleteRecurringInstance() for single instances, or pass originalEventId to deleteEvent()');
+  }
+  
   try {
-    // Delete the event - CASCADE will handle related records
+    // Delete the event - CASCADE will handle related records (including exceptions)
     const { error } = await supabase
       .from('events')
       .delete()
@@ -220,10 +305,16 @@ export async function deleteEvent(supabaseClient, eventId) {
 
 /**
  * Get event details with attendees
+ * @param {Object} supabaseClient - Supabase client instance (from useSupabase() hook)
  * @param {string} eventId - Event ID
  * @returns {Promise<Object>} Event details and error info
  */
-export async function getEventDetails(eventId) {
+export async function getEventDetails(supabaseClient, eventId) {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
     // Get event details
     const { data: eventData, error: eventError } = await supabase
@@ -264,15 +355,21 @@ export async function getEventDetails(eventId) {
 
 /**
  * RSVP to an event
+ * @param {Object} supabaseClient - Supabase client instance (from useSupabase() hook)
  * @param {string} eventId - Event ID
  * @param {string} status - RSVP status ('attending', 'not_attending', 'maybe', 'pending')
  * @param {string} notes - Optional notes
  * @returns {Promise<Object>} RSVP result and error info
  */
-export async function rsvpToEvent(eventId, status, notes = null) {
+export async function rsvpToEvent(supabaseClient, eventId, status, notes = null) {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
       throw new Error('User not authenticated');
     }
 
@@ -289,6 +386,11 @@ export async function rsvpToEvent(eventId, status, notes = null) {
       .single();
 
     if (error) throw error;
+    
+    // Check for RLS denial (data is null but no error)
+    if (!data && !error) {
+      throw new Error('RLS denied the request');
+    }
 
     return { data, error: null };
   } catch (error) {
@@ -299,13 +401,19 @@ export async function rsvpToEvent(eventId, status, notes = null) {
 
 /**
  * Get user's RSVP status for an event
+ * @param {Object} supabaseClient - Supabase client instance (from useSupabase() hook)
  * @param {string} eventId - Event ID
  * @returns {Promise<Object>} RSVP status and error info
  */
-export async function getUserEventRSVP(eventId) {
+export async function getUserEventRSVP(supabaseClient, eventId) {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
       throw new Error('User not authenticated');
     }
 
@@ -329,13 +437,19 @@ export async function getUserEventRSVP(eventId) {
 
 /**
  * Get events created by the current user
+ * @param {Object} supabaseClient - Supabase client instance (from useSupabase() hook)
  * @param {string} teamId - Team ID
  * @returns {Promise<Object>} User's events and error info
  */
-export async function getUserCreatedEvents(teamId) {
+export async function getUserCreatedEvents(supabaseClient, teamId) {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
       throw new Error('User not authenticated');
     }
 
@@ -351,23 +465,44 @@ export async function getUserCreatedEvents(teamId) {
     return { data: data || [], error: null };
   } catch (error) {
     console.error('Error fetching user created events:', error);
-    return { data: null, error };
+    return { data: [], error };
   }
 }
 
 /**
+ * Escape special characters in search term to prevent injection
+ * @param {string} term - Search term to escape
+ * @returns {string} Escaped search term
+ */
+function escapeSearchTerm(term) {
+  // Replace special characters that could break PostgREST queries
+  return String(term)
+    .replace(/[%_\\]/g, '\\$&') // Escape %, _, and backslash
+    .trim();
+}
+
+/**
  * Search events by title or description
+ * @param {Object} supabaseClient - Supabase client instance (from useSupabase() hook)
  * @param {string} teamId - Team ID
  * @param {string} searchTerm - Search term
  * @returns {Promise<Object>} Matching events and error info
  */
-export async function searchEvents(teamId, searchTerm) {
+export async function searchEvents(supabaseClient, teamId, searchTerm) {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  const supabase = supabaseClient;
+  
   try {
+    // Escape search term to prevent injection
+    const escapedTerm = escapeSearchTerm(searchTerm);
+    
     const { data, error } = await supabase
       .from('events')
       .select('*')
       .eq('team_id', teamId)
-      .or(`title.ilike.%${searchTerm}%,description.ilike.%${searchTerm}%`)
+      .or(`title.ilike.%${escapedTerm}%,description.ilike.%${escapedTerm}%`)
       .order('start_time', { ascending: true });
 
     if (error) throw error;
@@ -375,7 +510,7 @@ export async function searchEvents(teamId, searchTerm) {
     return { data: data || [], error: null };
   } catch (error) {
     console.error('Error searching events:', error);
-    return { data: null, error };
+    return { data: [], error };
   }
 }
 
@@ -401,59 +536,154 @@ function mapEventTypeToDatabase(eventType) {
   return eventType;
 }
 
+/**
+ * Parse event date and time from form data
+ * Uses robust parsing to handle various formats and edge cases
+ * @param {string} dateStr - Date string (expected MM/DD/YYYY format)
+ * @param {string} timeStr - Time string (expected H:MM AM/PM format)
+ * @returns {Date} Parsed date object
+ */
+function parseEventDateTime(dateStr, timeStr) {
+  if (!dateStr || !timeStr) {
+    throw new Error('Date and time are required');
+  }
+
+  // Parse date - handle MM/DD/YYYY format
+  const dateMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!dateMatch) {
+    throw new Error(`Invalid date format: ${dateStr}. Expected MM/DD/YYYY`);
+  }
+
+  const month = parseInt(dateMatch[1], 10) - 1; // JS months are 0-indexed
+  const day = parseInt(dateMatch[2], 10);
+  const year = parseInt(dateMatch[3], 10);
+
+  // Validate date components
+  if (isNaN(month) || isNaN(day) || isNaN(year) || month < 0 || month > 11 || day < 1 || day > 31) {
+    throw new Error(`Invalid date values: ${dateStr}`);
+  }
+
+  // Parse time - handle H:MM AM/PM format
+  const timeMatch = timeStr.match(/^(\d+):(\d+)\s*(AM|PM)$/i);
+  if (!timeMatch) {
+    throw new Error(`Invalid time format: ${timeStr}. Expected H:MM AM/PM`);
+  }
+
+  let hour = parseInt(timeMatch[1], 10);
+  const minute = parseInt(timeMatch[2], 10);
+  const period = timeMatch[3].toUpperCase();
+
+  // Validate time components
+  if (isNaN(hour) || isNaN(minute) || hour < 1 || hour > 12 || minute < 0 || minute > 59) {
+    throw new Error(`Invalid time values: ${timeStr}`);
+  }
+
+  // Convert to 24-hour format
+  if (period === 'PM' && hour !== 12) {
+    hour += 12;
+  } else if (period === 'AM' && hour === 12) {
+    hour = 0;
+  }
+
+  // Create date object - will handle invalid dates (e.g., Feb 30) by wrapping
+  const dateTime = new Date(year, month, day, hour, minute);
+  
+  // Validate the resulting date (handles DST transitions and invalid dates)
+  if (isNaN(dateTime.getTime())) {
+    throw new Error(`Invalid date/time combination: ${dateStr} ${timeStr}`);
+  }
+
+  // Check if date was adjusted due to invalid day (e.g., Feb 30 -> Mar 2)
+  if (dateTime.getDate() !== day || dateTime.getMonth() !== month || dateTime.getFullYear() !== year) {
+    throw new Error(`Invalid date: ${dateStr} (day doesn't exist in that month)`);
+  }
+
+  return dateTime;
+}
+
 export function formatEventData(formData, teamId, userId) {
-  // Parse date in MM/DD/YYYY format
-  const dateParts = formData.date.split('/');
-  const month = parseInt(dateParts[0]) - 1; // JS months are 0-indexed
-  const day = parseInt(dateParts[1]);
-  const year = parseInt(dateParts[2]);
-  
-  // Parse start time (use startTime or time field)
+  // Parse start date and time using robust parser
   const startTimeStr = formData.startTime || formData.time;
-  const startTimeParts = startTimeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
-  let startHour = parseInt(startTimeParts[1]);
-  const startMinute = parseInt(startTimeParts[2]);
-  const startPeriod = startTimeParts[3].toUpperCase();
-  
-  if (startPeriod === 'PM' && startHour !== 12) {
-    startHour += 12;
-  } else if (startPeriod === 'AM' && startHour === 12) {
-    startHour = 0;
+  if (!startTimeStr) {
+    throw new Error('Start time is required');
   }
   
-  const startDateTime = new Date(year, month, day, startHour, startMinute);
+  const startDateTime = parseEventDateTime(formData.date, startTimeStr);
   
-  // Parse end time (use endTime or startTime/time field)
-  const endTimeStr = formData.endTime || formData.startTime || formData.time;
-  const endTimeParts = endTimeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
-  let endHour = parseInt(endTimeParts[1]);
-  const endMinute = parseInt(endTimeParts[2]);
-  const endPeriod = endTimeParts[3].toUpperCase();
-  
-  if (endPeriod === 'PM' && endHour !== 12) {
-    endHour += 12;
-  } else if (endPeriod === 'AM' && endHour === 12) {
-    endHour = 0;
-  }
-  
-  const endDateTime = new Date(year, month, day, endHour, endMinute);
-  
-  // If endTime is not provided, default to 1 hour duration
-  if (!formData.endTime) {
+  // Parse end time (use endTime or default to 1 hour after start)
+  let endDateTime;
+  if (formData.endTime) {
+    endDateTime = parseEventDateTime(formData.date, formData.endTime);
+  } else {
+    // Default to 1 hour duration
+    endDateTime = new Date(startDateTime);
     endDateTime.setHours(startDateTime.getHours() + 1);
+  }
+  
+  // Ensure end time is after start time
+  if (endDateTime <= startDateTime) {
+    throw new Error('End time must be after start time');
   }
 
   // Determine if event is recurring and what the pattern is
-  const isRecurring = formData.recurring && formData.recurring !== 'None';
+  // New format: recurring is an array of day names, e.g. ['Sunday', 'Friday']
+  // Empty array [] means not recurring
+  // Legacy format: recurring is a string like 'Daily', 'Weekly', etc.
+  const recurringDays = formData.recurringDays || formData.recurring;
+  const isRecurring = recurringDays && (
+    (Array.isArray(recurringDays) && recurringDays.length > 0) ||
+    (typeof recurringDays === 'string' && recurringDays !== 'None')
+  );
   
-  // Normalize recurring pattern to lowercase to match database constraints
-  const recurringPatternMap = {
-    'Daily': 'daily',
-    'Weekly': 'weekly',
-    'Biweekly': 'biweekly',
-    'Monthly': 'monthly'
-  };
-  const recurringPattern = isRecurring ? (recurringPatternMap[formData.recurring] || formData.recurring.toLowerCase()) : null;
+  // For new format (array of days), we'll need backend support for recurring_days array
+  // For now, convert to a pattern string for backward compatibility
+  // TODO: Backend should support recurring_days array field
+  let recurringPattern = null;
+  if (isRecurring) {
+    if (Array.isArray(recurringDays)) {
+      // New format: array of days
+      // Determine pattern based on number of days selected
+      if (recurringDays.length === 7) {
+        recurringPattern = 'daily';
+      } else if (recurringDays.length === 1) {
+        // Single day selected - check if it matches the start date's day of week
+        const selectedDay = recurringDays[0];
+        const startDayOfWeek = startDateTime.toLocaleDateString('en-US', { weekday: 'long' });
+        
+        if (selectedDay === startDayOfWeek) {
+          // Selected day matches start date - use weekly pattern
+          recurringPattern = 'weekly';
+        } else {
+          // Selected day doesn't match start date - use custom_weekly
+          // This requires recurring_days which backend doesn't have yet, but we'll handle it
+          recurringPattern = 'custom_weekly';
+        }
+      } else {
+        recurringPattern = 'custom_weekly'; // Multiple days = custom weekly (requires recurring_days)
+      }
+    } else {
+      // Legacy format: string pattern
+      const recurringPatternMap = {
+        'Daily': 'daily',
+        'Weekly': 'weekly',
+        'Biweekly': 'biweekly',
+        'Monthly': 'monthly'
+      };
+      recurringPattern = recurringPatternMap[recurringDays] || recurringDays.toLowerCase();
+    }
+  }
+  
+  // ⚠️ WORKAROUND: Store selected days in description as JSON for custom_weekly events
+  // This is a temporary solution until backend adds recurring_days column
+  // Format: "RECURRING_DAYS_JSON:['Sunday','Friday']"
+  let description = formData.notes || null;
+  if (isRecurring && Array.isArray(recurringDays) && recurringPattern === 'custom_weekly') {
+    const daysJson = JSON.stringify(recurringDays);
+    const daysMarker = `RECURRING_DAYS_JSON:${daysJson}`;
+    description = description 
+      ? `${description}\n\n${daysMarker}` 
+      : daysMarker;
+  }
 
   // Normalize visibility to match database constraints
   const visibilityMap = {
@@ -483,13 +713,16 @@ export function formatEventData(formData, teamId, userId) {
   return {
     team_id: teamId,
     title: formData.title,
-    description: formData.notes || null,
+    description: description,
     event_type: mapEventTypeToDatabase(formData.eventType || 'other'),
     start_time: startDateTime.toISOString(),
     end_time: endDateTime.toISOString(),
     location: formData.location || null,
     is_recurring: isRecurring,
     recurring_pattern: recurringPattern,
+    // TODO: Backend needs to add recurring_days JSONB array column to support specific days
+    // For now, we only send recurring_pattern which the backend supports
+    // recurring_days: Array.isArray(recurringDays) ? recurringDays : null,
     recurring_until: formData.recurringUntil ? new Date(formData.recurringUntil).toISOString() : null,
     color: formData.color || '#FF4444',
     is_all_day: formData.isAllDay || false,
@@ -664,6 +897,15 @@ export async function uploadEventAttachment(supabaseClient, eventId, teamId, fil
         .remove([filePath]);
       throw attachmentError;
     }
+    
+    // Check for RLS denial (data is null but no error)
+    if (!attachmentRecord && !attachmentError) {
+      // Clean up uploaded file if RLS denied
+      await supabase.storage
+        .from('event-attachments')
+        .remove([filePath]);
+      throw new Error('RLS denied the request');
+    }
 
     console.log(`✅ Uploaded attachment ${fileName} successfully`);
     return { data: attachmentRecord, error: null };
@@ -676,7 +918,7 @@ export async function uploadEventAttachment(supabaseClient, eventId, teamId, fil
 /**
  * Get all attachments for an event
  * @param {Object} supabaseClient - Supabase client instance
- * @param {string} eventId - Event ID
+ * @param {string} eventId - Event ID (can be instanceId for recurring events)
  * @returns {Promise<Object>} Attachments array and error info
  */
 export async function getEventAttachments(supabaseClient, eventId) {
@@ -686,10 +928,18 @@ export async function getEventAttachments(supabaseClient, eventId) {
   const supabase = supabaseClient;
 
   try {
+    // Extract original event ID if eventId is an instanceId
+    // Attachments are stored against the original event ID, not instance IDs
+    let originalEventId = eventId;
+    if (eventId && eventId.includes(':')) {
+      // Instance ID format: "eventId:YYYY-MM-DD"
+      originalEventId = eventId.split(':')[0];
+    }
+    
     const { data, error } = await supabase
       .from('event_attachments')
       .select('*')
-      .eq('event_id', eventId)
+      .eq('event_id', originalEventId) // Use original event ID, not instanceId
       .order('created_at', { ascending: false });
 
     if (error) throw error;
@@ -744,25 +994,25 @@ export async function deleteEventAttachment(supabaseClient, attachmentId) {
 
     if (fetchError) throw fetchError;
 
-    // Delete from storage
-    if (attachment?.s3_key) {
-      const { error: storageError } = await supabase.storage
-        .from('event-attachments')
-        .remove([attachment.s3_key]);
-
-      if (storageError) {
-        console.warn('Warning: Failed to delete file from storage:', storageError);
-        // Continue to delete DB record anyway
-      }
-    }
-
-    // Delete database record (CASCADE will handle if needed)
+    // Delete database record FIRST (transactional order: DB then storage)
     const { error: deleteError } = await supabase
       .from('event_attachments')
       .delete()
       .eq('id', attachmentId);
 
     if (deleteError) throw deleteError;
+
+    // Then attempt to delete from storage (non-critical - log if fails)
+    if (attachment?.s3_key) {
+      const { error: storageError } = await supabase.storage
+        .from('event-attachments')
+        .remove([attachment.s3_key]);
+
+      if (storageError) {
+        console.warn('Warning: Failed to delete file from storage (DB record already deleted):', storageError);
+        // Continue - DB record is already deleted, storage cleanup can happen later
+      }
+    }
 
     return { success: true, error: null };
   } catch (error) {

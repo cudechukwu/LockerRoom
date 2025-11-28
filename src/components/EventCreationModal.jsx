@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,22 +13,37 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as DocumentPicker from 'expo-document-picker';
+// DocumentPicker is now handled by useEventAttachments hook
+import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS } from '../constants/colors';
 import { TYPOGRAPHY, FONT_SIZES, FONT_WEIGHTS, scaleFont } from '../constants/typography';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { getTodayAnchor } from '../utils/dateUtils';
-import { useDebounce } from '../hooks/useDebounce';
-import { getTeamAttendanceGroups } from '../api/attendanceGroups';
 import { useSupabase } from '../providers/SupabaseProvider';
-import { uploadEventAttachment } from '../api/events';
+// Note: uploadEventAttachment, getTeamAttendanceGroups, useDebounce, DocumentPicker
+// are now handled by their respective hooks (useEventSubmit, useEventGroups, useEventAttachments)
 import WhoSeesThisSection from './EventCreation/WhoSeesThisSection';
 import EventTypeTabs from './EventCreation/EventTypeTabs';
 import AssignedGroupsGrid from './EventCreation/AssignedGroupsGrid';
 import AttendanceSettingsSection from './EventCreation/AttendanceSettingsSection';
+import EventCoreDetailsCard from './EventCreation/EventCoreDetailsCard';
+import GradientCard from './EventCreation/GradientCard';
+import EventRecurringSection from './EventCreation/EventRecurringSection';
+import EventAttachmentsSection from './EventCreation/EventAttachmentsSection';
+import SaveButton from './EventCreation/SaveButton';
+// New hooks
+import { useEventFormState } from './EventCreation/hooks/useEventFormState';
+import { useEventTimes } from './EventCreation/hooks/useEventTimes';
+import { useEventGroups } from './EventCreation/hooks/useEventGroups';
+import { useEventVisibility } from './EventCreation/hooks/useEventVisibility';
+import { useEventAttachments } from './EventCreation/hooks/useEventAttachments';
+import { useEventSubmit } from './EventCreation/hooks/useEventSubmit';
+import { useEventFormData } from './EventCreation/hooks/useEventFormData';
+import { parseDateFromInput } from '../utils/dateUtils';
 
 const { width, height } = Dimensions.get('window');
 const isTablet = width >= 768;
+
 
 const EventCreationModal = ({ 
   visible, 
@@ -42,52 +57,184 @@ const EventCreationModal = ({
   const supabase = useSupabase();
   const insets = useSafeAreaInsets();
   
-  // Who sees this state (maps to visibility)
-  const [whoSeesThis, setWhoSeesThis] = useState('team'); // 'team' | 'specificGroups' | 'personal'
-  const [postTo, setPostTo] = useState('Team'); // Keep for backward compatibility during transition
-  const [eventType, setEventType] = useState('practice');
-  const [title, setTitle] = useState('');
-  const [date, setDate] = useState(() => {
-    const today = getTodayAnchor();
-    const month = (today.getMonth() + 1).toString().padStart(2, '0');
-    const day = today.getDate().toString().padStart(2, '0');
-    const year = today.getFullYear();
-    return `${month}/${day}/${year}`;
-  });
-  const [startTime, setStartTime] = useState('3:00 PM');
-  const [endTime, setEndTime] = useState('5:00 PM');
-  const [location, setLocation] = useState('');
-  const [recurring, setRecurring] = useState('None');
-  const [notes, setNotes] = useState('');
-  const [attachments, setAttachments] = useState([]); // File attachments (local files before upload)
-  const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
+  // Error state tracking for field-level validation feedback
+  const [fieldErrors, setFieldErrors] = useState({});
+  const titleInputRef = useRef(null);
   
-  // Attendance settings state
-  const [attendanceRequirement, setAttendanceRequirement] = useState('required');
-  const [checkInMethods, setCheckInMethods] = useState(['qr_code', 'location', 'manual']);
+  // STEP 1: Replace basic form state with useEventFormState hook
+  // This manages: title, eventType, date, location, notes, recurring, attendance settings, expanded sections, dropdowns
+  const {
+    // State object (needed for accessing startTime/endTime for useEventTimes)
+    formState,
+    // Core form fields
+    title,
+    setTitle,
+    eventType,
+    setEventType,
+    date,
+    setDate,
+    location,
+    setLocation,
+    notes,
+    setNotes,
+    recurring,
+    setRecurring,
+    // Attendance settings
+    attendanceRequirement,
+    setAttendanceRequirement,
+    checkInMethods,
+    setCheckInMethods,
+    // UI state
+    expandedSections,
+    toggleSection,
+    openDropdown,
+    setDropdown,
+    closeDropdown,
+    // Utilities
+    setMultipleFields,
+    resetForm,
+  } = useEventFormState();
+  
+  // STEP 4: Replace attachments management with useEventAttachments hook
+  const attachmentsState = useEventAttachments(formState.attachments || []);
 
-  // Dropdown visibility states
-  const [showPostToDropdown, setShowPostToDropdown] = useState(false);
-  const [showEventTypeDropdown, setShowEventTypeDropdown] = useState(false);
-  const [showLocationDropdown, setShowLocationDropdown] = useState(false);
-  const [showRecurringDropdown, setShowRecurringDropdown] = useState(false);
-  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
-  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
+  // Sync attachments back to form state when they change (prevent circular updates)
+  useEffect(() => {
+    const currentAttachments = formState.attachments || [];
+    const newAttachments = attachmentsState.attachments || [];
+    
+    // Only sync if attachments actually changed (prevent circular updates)
+    if (JSON.stringify(currentAttachments) !== JSON.stringify(newAttachments)) {
+      setMultipleFields({ attachments: newAttachments });
+    }
+  }, [attachmentsState.attachments, setMultipleFields, formState.attachments]);
 
-  // Attendance groups state
-  const [eventVisibility, setEventVisibility] = useState('fullTeam'); // 'fullTeam' | 'specificGroups'
-  const [selectedGroups, setSelectedGroups] = useState([]); // Array of group IDs
-  const [showGroupSelector, setShowGroupSelector] = useState(false);
-  const [availableGroups, setAvailableGroups] = useState([]); // All groups for team
-  const [groupSearchQuery, setGroupSearchQuery] = useState('');
-  const [userModifiedGroups, setUserModifiedGroups] = useState(false); // Track if user manually changed groups
-  const [isLoadingGroups, setIsLoadingGroups] = useState(false);
+  // Destructure for easier access (rename to avoid conflicts)
+  const {
+    attachments,
+    pickFiles: pickFilesInternal,
+    removeAttachment: removeAttachmentInternal,
+  } = attachmentsState;
+  
+  // Wrapper functions for backward compatibility
+  const handlePickFiles = useCallback(() => {
+    pickFilesInternal();
+  }, [pickFilesInternal]);
 
-  // Debounced search query for performance
-  const debouncedSearchQuery = useDebounce(groupSearchQuery, 150);
+  const removeAttachment = useCallback((index) => {
+    removeAttachmentInternal(index);
+  }, [removeAttachmentInternal]);
+  
+  // STEP 3: Replace groups/visibility management with hooks
+  // useEventVisibility manages whoSeesThis, eventVisibility, selectedGroups
+  const visibilityState = useEventVisibility({
+    initialWhoSeesThis: formState.whoSeesThis || 'team',
+    initialVisibility: formState.eventVisibility || 'fullTeam',
+    initialSelectedGroups: formState.selectedGroups || [],
+  });
+  
+  // Sync visibility state back to form state (prevent circular updates)
+  useEffect(() => {
+    const currentWhoSeesThis = formState.whoSeesThis || 'team';
+    const currentVisibility = formState.eventVisibility || 'fullTeam';
+    const currentGroups = formState.selectedGroups || [];
+
+    // Only sync if values actually changed (prevent circular updates)
+    if (
+      currentWhoSeesThis !== visibilityState.whoSeesThis ||
+      currentVisibility !== visibilityState.eventVisibility ||
+      JSON.stringify(currentGroups) !== JSON.stringify(visibilityState.selectedGroups)
+    ) {
+      setMultipleFields({
+        whoSeesThis: visibilityState.whoSeesThis,
+        eventVisibility: visibilityState.eventVisibility,
+        selectedGroups: visibilityState.selectedGroups,
+      });
+    }
+  }, [visibilityState.whoSeesThis, visibilityState.eventVisibility, visibilityState.selectedGroups, setMultipleFields, formState.whoSeesThis, formState.eventVisibility, formState.selectedGroups]);
+
+  // useEventGroups manages availableGroups, filtering, loading
+  const groupsState = useEventGroups({
+    supabase,
+    teamId,
+    editingEvent,
+    visible,
+    selectedGroups: visibilityState.selectedGroups,
+    onSelectedGroupsChange: visibilityState.setSelectedGroups,
+    onVisibilityChange: visibilityState.setEventVisibility,
+    userModifiedGroups: visibilityState.userModifiedGroups,
+  });
+  
+  // Destructure for easier access
+  const {
+    whoSeesThis,
+    setWhoSeesThis,
+    eventVisibility,
+    setEventVisibility,
+    selectedGroups,
+    setSelectedGroups,
+    toggleGroup: toggleGroupVisibility,
+    userModifiedGroups,
+  } = visibilityState;
+  
+  const {
+    availableGroups,
+    filteredGroups,
+    isLoadingGroups,
+    groupSearchQuery,
+    setGroupSearchQuery,
+  } = groupsState;
+
+  // STEP 2: Replace time management with useEventTimes hook
+  // Parse date string to Date object for time anchoring
+  const eventDateObj = useMemo(() => {
+    if (!date) return new Date();
+    return parseDateFromInput(date) || new Date();
+  }, [date]);
+
+  // Use useEventTimes for time management (it handles duration calculation)
+  // Initialize with times from form state (which are already Date objects from useEventFormState)
+  const {
+    startTime,
+    setStartTime: setStartTimeInternal,
+    endTime,
+    setEndTime: setEndTimeInternal,
+    durationText,
+  } = useEventTimes(formState.startTime, formState.endTime, eventDateObj);
+  
+  // Wrapper setters that update both useEventTimes and form state
+  const setStartTime = useCallback((newTime) => {
+    setStartTimeInternal(newTime);
+    setMultipleFields({ startTime: newTime });
+  }, [setStartTimeInternal, setMultipleFields]);
+  
+  const setEndTime = useCallback((newTime) => {
+    setEndTimeInternal(newTime);
+    setMultipleFields({ endTime: newTime });
+  }, [setEndTimeInternal, setMultipleFields]);
+    
+  // isUploadingAttachments is now provided by useEventSubmit hook (see below)
+  
+  // Map openDropdown to showRecurringDropdown for backward compatibility during migration
+  const showRecurringDropdown = openDropdown === 'recurring';
+  const setShowRecurringDropdown = (show) => {
+    if (show) {
+      setDropdown('recurring');
+    } else {
+      closeDropdown();
+    }
+  };
+  
+  // Helper to close all dropdowns (for backward compatibility)
+  const closeAllDropdowns = () => {
+    closeDropdown();
+  };
+  
+  // Group selector is now integrated into openDropdown state
+  const showGroupSelector = openDropdown === 'groups';
 
   // Event type configurations with colors
-  const eventTypes = [
+  const eventTypes = useMemo(() => [
     { id: 'practice', title: 'Practice', color: teamColors.primary, icon: 'P' },
     { id: 'workout', title: 'Workout', color: teamColors.primary, icon: 'W' },
     { id: 'meeting', title: 'Meeting', color: '#10B981', icon: 'M' },
@@ -96,609 +243,240 @@ const EventCreationModal = ({
     { id: 'travel', title: 'Travel', color: '#3B82F6', icon: 'T' },
     { id: 'game', title: 'Game', color: '#1F2937', icon: 'G' },
     { id: 'other', title: 'Other', color: '#6B7280', icon: 'O' },
-  ];
-
-  const postToOptions = ['Team', 'Personal', 'Coaches Only', 'Players Only'];
-  const groupOptions = ['All Defense', 'Offensive Line', 'Special Teams', 'Coaching Staff'];
-  const locationSuggestions = ['Practice Field', 'Home Stadium', 'Away Game', 'Film Room', 'Weight Room', 'Locker Room', 'Training Field'];
-  const recurringOptions = ['None', 'Daily', 'Weekly', 'Every Tue/Thu', 'Every Mon/Wed/Fri', 'Monthly'];
+  ], [teamColors.primary]);
   
-  // Time options (12-hour format)
-  const timeOptions = [
-    '6:00 AM', '6:30 AM', '7:00 AM', '7:30 AM', '8:00 AM', '8:30 AM', '9:00 AM', '9:30 AM',
-    '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM', '12:00 PM', '12:30 PM', '1:00 PM', '1:30 PM',
-    '2:00 PM', '2:30 PM', '3:00 PM', '3:30 PM', '4:00 PM', '4:30 PM', '5:00 PM', '5:30 PM',
-    '6:00 PM', '6:30 PM', '7:00 PM', '7:30 PM', '8:00 PM', '8:30 PM', '9:00 PM', '9:30 PM',
-    '10:00 PM', '10:30 PM', '11:00 PM', '11:30 PM'
-  ];
+  // STEP 5: Replace handleCreateEvent with useEventSubmit hook
+  // Note: We pass individual pieces instead of a combined object to avoid unnecessary recomputations
+  // The submitEvent function will combine them internally when needed
+  
+  // Use submission hook
+  const { submitEvent, isUploadingAttachments: isUploadingFromHook, isSubmitting } = useEventSubmit(onCreateEvent, {
+    supabase,
+    teamId,
+    onSuccess: () => {
+      // Reset form and close modal on success
+      resetForm();
+      visibilityState.reset();
+      attachmentsState.clearAttachments();
+      onClose();
+    },
+    onError: (errors) => {
+      // Errors are already shown by the hook via Alert
+      console.error('Event submission errors:', errors);
+    },
+  });
 
-
-  // Auto-fill title when event type changes
-  useEffect(() => {
-    const selectedEventType = eventTypes.find(type => type.id === eventType);
-    if (selectedEventType) {
-      // For "Other", don't auto-fill, let user type custom title
-      if (eventType === 'other') {
-        setTitle('');
-      } else {
-        setTitle(selectedEventType.title);
+  // Use isUploadingAttachments from hook
+  const isUploadingAttachments = isUploadingFromHook;
+  
+  // Wrapper for handleCreateEvent that uses the hook
+  // Pass individual state pieces instead of combined object to avoid recomputation
+  const handleCreateEvent = useCallback(async () => {
+    // Clear previous errors
+    setFieldErrors({});
+    
+    // Build form data from individual pieces (avoid spreading formState object)
+    const formData = {
+      title: formState.title,
+      eventType: formState.eventType,
+      date: formState.date,
+      location: formState.location,
+      notes: formState.notes,
+      recurring: formState.recurring,
+      attendanceRequirement: formState.attendanceRequirement,
+      checkInMethods: formState.checkInMethods,
+      // Time fields (from useEventTimes)
+      startTime,
+      endTime,
+      // Visibility fields (from useEventVisibility)
+      whoSeesThis,
+      selectedGroups,
+      // Attachments (from useEventAttachments)
+      attachments,
+    };
+    
+    const result = await submitEvent(formData, {
+      eventTypes,
+      teamColors,
+    });
+    
+    // If validation failed, set field errors and focus the first error field
+    if (!result.success && result.fieldErrors) {
+      setFieldErrors(result.fieldErrors);
+        
+      // Auto-focus the first field with an error
+      if (result.fieldErrors.title && titleInputRef.current) {
+        // Small delay to ensure modal is fully rendered
+        setTimeout(() => {
+          titleInputRef.current?.focus();
+        }, 100);
       }
+    } else if (result.success) {
+      // Clear errors on success
+      setFieldErrors({});
     }
-  }, [eventType]);
+    
+    // If successful, the onSuccess callback handles reset and close
+    // If failed, errors are already shown by the hook
+    return result;
+  }, [submitEvent, formState.title, formState.eventType, formState.date, formState.location, formState.notes, formState.recurring, formState.attendanceRequirement, formState.checkInMethods, startTime, endTime, whoSeesThis, selectedGroups, attachments, eventTypes, teamColors]);
+  
+  // Clear field error when user starts typing
+  const handleTitleChange = useCallback((text) => {
+    setTitle(text);
+    // Use functional update to avoid dependency on fieldErrors.title
+    setFieldErrors(prev => {
+      if (prev.title) {
+        const next = { ...prev };
+        delete next.title;
+        return next;
+      }
+      return prev;
+    });
+  }, [setTitle]);
 
-  // Handle prefilled data
-  useEffect(() => {
-    if (prefilledData.eventType) {
-      setEventType(prefilledData.eventType);
-    }
-    if (prefilledData.date) {
-      setDate(prefilledData.date);
-    }
-    if (prefilledData.time) {
-      setStartTime(prefilledData.time);
-    }
-    if (prefilledData.endTime) {
-      setEndTime(prefilledData.endTime);
-    }
-  }, [prefilledData]);
+  // STEP 6: Integrate useEventFormData hook for prefill/edit mode logic
+  // This replaces the old useEffect hooks for handling editingEvent and prefilledData
+  useEventFormData({
+    visible,
+    editingEvent,
+    prefilledData,
+    formState,
+    onFormUpdate: setMultipleFields, // Use setMultipleFields to update form state
+    eventDate: eventDateObj, // Pass the parsed event date for time anchoring
+  });
+
+  // Note: All dropdown options are now handled by their respective components
+  // (EventRecurringSection, etc.)
 
   // Reset form state when modal closes
   useEffect(() => {
     if (!visible) {
-      // Reset group-related state
-      setEventVisibility('fullTeam');
-      setSelectedGroups([]);
-      setUserModifiedGroups(false);
-      setGroupSearchQuery('');
-      setShowGroupSelector(false);
+      // Close all dropdowns (including group selector)
+      closeDropdown();
+      // Clear field errors
+      setFieldErrors({});
+      // Visibility and groups are reset by their respective hooks
     }
-  }, [visible]);
+  }, [visible, closeDropdown]);
 
-  // Load available groups when modal opens
-  const loadAvailableGroups = async () => {
-    if (!teamId) return;
+  // Group selection handler (uses visibility hook's toggleGroup)
+  const toggleGroup = useCallback((groupId) => {
+    toggleGroupVisibility(groupId);
+  }, [toggleGroupVisibility]);
 
-    try {
-      setIsLoadingGroups(true);
-      const { data, error } = await getTeamAttendanceGroups(supabase, teamId);
-      if (error) {
-        console.error('Error loading groups:', error);
-        return;
-      }
-      setAvailableGroups(data || []);
-    } catch (error) {
-      console.error('Error loading groups:', error);
-    } finally {
-      setIsLoadingGroups(false);
-    }
-  };
+  // File picker and attachment removal are now handled by useEventAttachments hook (see above)
+  // handleCreateEvent is now defined above using useEventSubmit hook
 
-  useEffect(() => {
-    // Load groups when modal opens - keep them loaded regardless of selection
-    // This prevents the flash of "no groups" when switching from personal to groups
-    if (visible && teamId && supabase) {
-      loadAvailableGroups();
-    } else if (!visible) {
-      // Only clear groups when modal closes
-      setAvailableGroups([]);
-    }
-  }, [visible, teamId, supabase]);
-
-  // 🟥 CRITICAL: Filter stale group memberships when availableGroups changes
-  useEffect(() => {
-    if (availableGroups.length > 0) {
-      setSelectedGroups(prev =>
-        prev.filter(id => availableGroups.some(g => g.id === id))
-      );
-    }
-  }, [availableGroups]);
-
-  // Pre-fill for Edit Mode (Fixed Timing Issue + User Modification Protection)
-  useEffect(() => {
-    // Don't pre-fill if user has already modified groups manually
-    if (!editingEvent || !availableGroups.length || userModifiedGroups) return;
-    
-    // Check if event has assigned groups
-    // Derive full-team status from assigned_attendance_groups array length
-    const assignedGroups = editingEvent.assigned_attendance_groups || [];
-    const isFullTeam = !Array.isArray(assignedGroups) || assignedGroups.length === 0;
-    
-    // Filter out any groups that no longer exist
-    const validGroupIds = assignedGroups.filter(id => 
-      availableGroups.some(g => g.id === id)
-    );
-    
-    if (isFullTeam || validGroupIds.length === 0) {
-      setEventVisibility('fullTeam');
-      setSelectedGroups([]);
-    } else {
-      setEventVisibility('specificGroups');
-      setSelectedGroups(validGroupIds);
-    }
-  }, [editingEvent, availableGroups, userModifiedGroups]);
-
-  // Filter groups by search query
-  const filteredGroups = useMemo(() => {
-    if (!debouncedSearchQuery) return availableGroups;
-    const query = debouncedSearchQuery.toLowerCase();
-    return availableGroups.filter(group =>
-      group.name.toLowerCase().includes(query)
-    );
-  }, [availableGroups, debouncedSearchQuery]);
-
-  // Group selection handlers
-  const toggleGroup = (groupId) => {
-    setUserModifiedGroups(true);
-    setSelectedGroups(prev => {
-      if (prev.includes(groupId)) {
-        return prev.filter(id => id !== groupId);
-      } else {
-        return [...prev, groupId];
-      }
-    });
-  };
-
-  const removeGroup = (groupId) => {
-    setUserModifiedGroups(true);
-    setSelectedGroups(prev => prev.filter(id => id !== groupId));
-  };
-
-  const handleVisibilityChange = (visibility) => {
-    setEventVisibility(visibility);
-    if (visibility === 'fullTeam') {
-      setSelectedGroups([]);
-      setUserModifiedGroups(false);
-    }
-  };
-
-  // Handle file picker
-  const handlePickFiles = async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: '*/*', // Allow all file types
-        multiple: true,
-        copyToCacheDirectory: true,
-      });
-
-      if (!result.canceled && result.assets) {
-        const newFiles = result.assets.map(asset => ({
-          uri: asset.uri,
-          name: asset.name || 'Untitled',
-          type: asset.mimeType || 'application/octet-stream',
-          size: asset.size || 0,
-        }));
-        setAttachments(prev => [...prev, ...newFiles]);
-      }
-    } catch (error) {
-      console.error('Error picking files:', error);
-      Alert.alert('Error', 'Failed to pick files. Please try again.');
-    }
-  };
-
-  // Remove attachment from list
-  const removeAttachment = (index) => {
-    setAttachments(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleCreateEvent = async () => {
-    console.log('🔵 EventCreationModal: handleCreateEvent called');
-    console.log('🔵 Form state:', { postTo, eventType, title, date, startTime, endTime, location, recurring, notes });
-    
-    // Basic validation
-    if (!title || !title.trim()) {
-      console.warn('⚠️ Title is required');
-      return;
-    }
-
-    // Map whoSeesThis to visibility
-    let visibility = 'team';
-    if (whoSeesThis === 'personal') {
-      visibility = 'personal';
-    } else if (whoSeesThis === 'specificGroups') {
-      visibility = 'team'; // Specific groups still use 'team' visibility
-    } else {
-      visibility = 'team';
-    }
-
-    // Validate group selection
-    if (whoSeesThis === 'specificGroups' && selectedGroups.length === 0) {
-      Alert.alert('Error', 'Please select at least one group for this event.');
-      return;
-    }
-    
-    const eventData = {
-      postTo: whoSeesThis === 'personal' ? 'Personal' : whoSeesThis === 'specificGroups' ? 'Team' : 'Team', // Map for backward compatibility
-      eventType,
-      title,
-      date,
-      startTime,
-      endTime,
-      location,
-      recurring,
-      notes,
-      color: eventTypes.find(type => type.id === eventType)?.color || teamColors.primary,
-      // Attendance groups data
-      // Note: isFullTeamEvent is derived from assignedAttendanceGroups array length (empty = full team)
-      assignedAttendanceGroups: whoSeesThis === 'specificGroups' ? selectedGroups : [],
-      // Attendance settings
-      attendanceRequirement,
-      checkInMethods,
-    };
-    
-    console.log('🔵 Calling onCreateEvent with:', eventData);
-    console.log('🔵 onCreateEvent function type:', typeof onCreateEvent);
-    
-    if (typeof onCreateEvent === 'function') {
-      try {
-        // Call the async function and wait for it (creates the event)
-        const result = await onCreateEvent(eventData);
-        console.log('🔵 onCreateEvent completed successfully');
-        
-        // Upload attachments if event was created successfully and we have attachments
-        if (result?.data?.id && attachments.length > 0 && teamId) {
-          setIsUploadingAttachments(true);
-          try {
-            // Upload attachments one by one (non-blocking pattern)
-            const uploadResults = await Promise.allSettled(
-              attachments.map(file => 
-                uploadEventAttachment(supabase, result.data.id, teamId, file)
-              )
-            );
-
-            // Check for failures
-            const failures = uploadResults.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && r.value.error));
-            if (failures.length > 0) {
-              console.warn(`⚠️ ${failures.length} attachment(s) failed to upload`);
-              Alert.alert(
-                'Upload Warning',
-                `${attachments.length - failures.length} of ${attachments.length} file(s) uploaded successfully. Some files failed to upload.`,
-                [{ text: 'OK' }]
-              );
-            } else {
-              console.log(`✅ All ${attachments.length} attachment(s) uploaded successfully`);
-            }
-          } catch (error) {
-            console.error('❌ Error uploading attachments:', error);
-            Alert.alert(
-              'Upload Error',
-              'Event was created but some files failed to upload. You can add them later.',
-              [{ text: 'OK' }]
-            );
-          } finally {
-            setIsUploadingAttachments(false);
-          }
-        }
-
-        // Reset form state after successful creation
-        setEventVisibility('fullTeam');
-        setSelectedGroups([]);
-        setUserModifiedGroups(false);
-        setGroupSearchQuery('');
-        setShowGroupSelector(false);
-        setAttachments([]);
-      } catch (error) {
-        console.error('❌ Error in onCreateEvent:', error);
-        Alert.alert('Error', 'Failed to create event. Please try again.');
-        return;
-      }
-    } else {
-      console.error('❌ onCreateEvent is not a function!', onCreateEvent);
-      return;
-    }
-    
-    // Close modal after async operation completes
-    onClose();
-    
-    // Reset form
-    setPostTo('Team');
-    setEventType('practice');
-    setTitle('');
-    setLocation('');
-    setRecurring('None');
-    setNotes('');
-  };
-
-  const closeAllDropdowns = () => {
-    setShowPostToDropdown(false);
-    setShowEventTypeDropdown(false);
-    setShowLocationDropdown(false);
-    setShowRecurringDropdown(false);
-    setShowStartTimePicker(false);
-    setShowEndTimePicker(false);
-    setShowGroupSelector(false);
-  };
-
-  // Helper function to convert time string to minutes for comparison
-  const timeToMinutes = (timeString) => {
-    const [time, period] = timeString.split(' ');
-    let [hours, minutes] = time.split(':').map(Number);
-    
-    if (period === 'PM' && hours !== 12) hours += 12;
-    if (period === 'AM' && hours === 12) hours = 0;
-    
-    return hours * 60 + minutes;
-  };
-
-  // Calculate event duration and check if it spans midnight
-  const getEventDuration = () => {
-    const startMinutes = timeToMinutes(startTime);
-    const endMinutes = timeToMinutes(endTime);
-    
-    let durationMinutes;
-    let spansNextDay = false;
-    
-    if (endMinutes <= startMinutes) {
-      // Event spans midnight
-      durationMinutes = (24 * 60) - startMinutes + endMinutes;
-      spansNextDay = true;
-    } else {
-      // Same day event
-      durationMinutes = endMinutes - startMinutes;
-    }
-    
-    const hours = Math.floor(durationMinutes / 60);
-    const minutes = durationMinutes % 60;
-    
-    let durationText = '';
-    if (hours > 0) durationText += `${hours}h`;
-    if (minutes > 0) durationText += `${minutes > 0 && hours > 0 ? ' ' : ''}${minutes}m`;
-    
-    return { duration: durationText, spansNextDay };
-  };
-
-  const renderDropdown = (label, value, options, onSelect, showColors = false, isOpen, setIsOpen) => (
-    <View style={styles.fieldContainer}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TouchableOpacity 
-        style={styles.dropdown}
-        onPress={() => {
-          closeAllDropdowns();
-          setIsOpen(!isOpen);
-        }}
-      >
-        <View style={styles.dropdownContent}>
-          {showColors && (
-            <View style={[
-              styles.colorIndicator, 
-              { backgroundColor: eventTypes.find(type => type.id === value)?.color || '#6B7280' }
-            ]}>
-              <Text style={styles.colorIndicatorText}>
-                {eventTypes.find(type => type.id === value)?.icon || '?'}
-              </Text>
-            </View>
-          )}
-          <Text style={styles.dropdownText}>
-            {showColors 
-              ? eventTypes.find(type => type.id === value)?.title || value
-              : value
-            }
-          </Text>
-        </View>
-        <Ionicons 
-          name={isOpen ? "chevron-up" : "chevron-down"} 
-          size={20} 
-          color={COLORS.TEXT_TERTIARY} 
-        />
-      </TouchableOpacity>
-      
-      {/* Dropdown Options */}
-      {isOpen && (
-        <View style={styles.dropdownOptions}>
-          {(showColors ? eventTypes : options.map(opt => ({ id: opt, title: opt }))).map((option) => (
-            <TouchableOpacity
-              key={option.id || option.title}
-              style={styles.dropdownOption}
-              onPress={() => {
-                onSelect(showColors ? option.id : option.title);
-                setIsOpen(false);
-              }}
-            >
-              {showColors && (
-                <View style={[styles.colorIndicator, { backgroundColor: option.color }]}>
-                  <Text style={styles.colorIndicatorText}>{option.icon}</Text>
-                </View>
-              )}
-              <Text style={styles.dropdownOptionText}>{option.title}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
-    </View>
-  );
+  // Duration calculation is now handled by useEventTimes hook (durationText is available above)
 
   return (
     <Modal
       visible={visible}
       animationType="slide"
       presentationStyle="overFullScreen"
-      transparent={true}
+      transparent={false}
       onRequestClose={onClose}
     >
-      <View style={styles.modalContainer}>
-        <View style={styles.modalTint} />
-        <View style={[styles.modalContent, { paddingTop: insets.top }]}>
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={onClose} style={styles.closeButton} activeOpacity={0.7}>
-            <Ionicons name="close" size={24} color={COLORS.TEXT_PRIMARY} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Create Event</Text>
-          <TouchableOpacity 
-            onPress={() => {
-              console.log('🔴 Save button pressed!');
-              handleCreateEvent();
-            }} 
-            style={styles.createButton}
-            activeOpacity={0.8}
+      <SafeAreaView style={styles.safe} edges={['left', 'right']}>
+        <View style={styles.container}>
+          {/* Form Content - Header scrolls with content */}
+          <ScrollView 
+            style={styles.content} 
+            contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 40 }]}
+            showsVerticalScrollIndicator={false}
+            scrollEnabled={true}
           >
-            <Text style={styles.createButtonText}>Save</Text>
+            {/* Header - Exact match to EventDetails EventHero */}
+            <View style={[styles.heroSection, { paddingTop: insets.top + 4 }]}>
+            {/* Top Action Bar */}
+            <View style={styles.heroActionBar}>
+              <TouchableOpacity onPress={onClose} style={styles.heroActionButtonLeft} activeOpacity={0.7}>
+                <Ionicons name="close" size={22} color={COLORS.TEXT_SECONDARY} />
           </TouchableOpacity>
+              <SaveButton
+                onPress={handleCreateEvent}
+                isSubmitting={isSubmitting}
+                isUploadingAttachments={isUploadingAttachments}
+              />
         </View>
-
-        {/* Form Content */}
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+          </View>
           {/* Section A: Who Sees This */}
-          <View style={styles.section}>
+          <GradientCard>
             <WhoSeesThisSection
               selectedValue={whoSeesThis}
-              onValueChange={(value) => {
-                setWhoSeesThis(value);
-                // Map to old postTo for now (will be removed later)
-                if (value === 'team') {
-                  setPostTo('Team');
-                  setEventVisibility('fullTeam');
-                } else if (value === 'personal') {
-                  setPostTo('Personal');
-                  setEventVisibility('fullTeam');
-                } else if (value === 'specificGroups') {
-                  setPostTo('Team'); // Groups still use 'Team' visibility
-                  setEventVisibility('specificGroups');
-                }
-              }}
-              selectedGroups={selectedGroups}
-              availableGroups={availableGroups}
+              onValueChange={setWhoSeesThis}
               teamColors={teamColors}
             />
-          </View>
+          </GradientCard>
 
           {/* Section B: Event Type */}
-          <View style={styles.section}>
+          <GradientCard>
             <EventTypeTabs
               selectedType={eventType}
               onTypeChange={(type) => {
                 setEventType(type);
-                // Auto-fill title if empty
-                if (!title || title.trim() === '') {
-                  const typeConfig = eventTypes.find(t => t.id === type);
-                  if (typeConfig && type !== 'other') {
-                    setTitle(typeConfig.title);
-                  }
-                }
               }}
               teamColors={teamColors}
             />
-          </View>
+          </GradientCard>
 
-          {/* Section C: Core Details */}
-          <View style={styles.coreDetailsCard}>
-            {/* Title */}
-            <View style={styles.inputField}>
-              <TextInput
-                style={styles.modernInput}
-                value={title}
-                onChangeText={setTitle}
-                placeholder="Event title"
-                placeholderTextColor={COLORS.TEXT_TERTIARY}
-              />
-            </View>
-            <View style={styles.fieldDivider} />
-
-            {/* Description */}
-            <View style={styles.inputField}>
-              <TextInput
-                style={[styles.modernInput, styles.multilineInput]}
-                value={notes}
-                onChangeText={setNotes}
-                placeholder="Add description..."
-                placeholderTextColor={COLORS.TEXT_TERTIARY}
-                multiline
-                textAlignVertical="top"
-              />
-            </View>
-            <View style={styles.fieldDivider} />
-
-            {/* Location */}
-            <View style={styles.inputField}>
-              <TextInput
-                style={styles.modernInput}
-                value={location}
-                onChangeText={setLocation}
-                placeholder="Location"
-                placeholderTextColor={COLORS.TEXT_TERTIARY}
-              />
-              <TouchableOpacity 
-                style={styles.useCurrentLocationButton}
-                onPress={() => {
-                  // TODO: Implement current location
-                  console.log('Use current location');
-                }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="location" size={14} color={COLORS.TEXT_SECONDARY} style={{ marginRight: 6 }} />
-                <Text style={styles.useCurrentLocationText}>Use current location</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.fieldDivider} />
-
-            {/* Date and Time */}
-            <View style={styles.dateTimeRow}>
-              {/* Date */}
-              <View style={[styles.inputField, styles.dateInputField]}>
-                <TextInput
-                  style={styles.modernInput}
-                  value={date}
-                  onChangeText={setDate}
-                  placeholder="Date"
-                  placeholderTextColor={COLORS.TEXT_TERTIARY}
-                  keyboardType="numeric"
+          {/* Section C: Core Details - Always Visible */}
+          <EventCoreDetailsCard
+            title={title}
+            setTitle={handleTitleChange}
+            notes={notes}
+            setNotes={setNotes}
+            location={location}
+            setLocation={setLocation}
+            date={date}
+            setDate={setDate}
+            startTime={startTime}
+            setStartTime={setStartTime}
+            endTime={endTime}
+            setEndTime={setEndTime}
+            durationText={durationText}
+            titleError={fieldErrors.title}
+            titleInputRef={titleInputRef}
                 />
-              </View>
-            </View>
-            <View style={styles.fieldDivider} />
-
-            {/* Start Time and End Time */}
-            <View style={styles.timeRow}>
-              <View style={[styles.inputField, styles.timeInputField]}>
-                <TextInput
-                  style={styles.modernInput}
-                  value={startTime}
-                  onChangeText={setStartTime}
-                  placeholder="Start time"
-                  placeholderTextColor={COLORS.TEXT_TERTIARY}
-                />
-              </View>
-              <View style={[styles.inputField, styles.timeInputField]}>
-                <TextInput
-                  style={styles.modernInput}
-                  value={endTime}
-                  onChangeText={setEndTime}
-                  placeholder="End time"
-                  placeholderTextColor={COLORS.TEXT_TERTIARY}
-                />
-              </View>
-            </View>
-          </View>
 
           {/* Section F: Assigned Groups (only shown when "Specific group(s)" is selected) */}
           {whoSeesThis === 'specificGroups' && (
-            <View style={styles.section}>
+            <GradientCard>
               <AssignedGroupsGrid
                 selectedGroups={selectedGroups}
                 availableGroups={availableGroups}
-                onToggleGroup={(groupId) => {
-                  setUserModifiedGroups(true);
-                  setSelectedGroups(prev => {
-                    if (prev.includes(groupId)) {
-                      return prev.filter(id => id !== groupId);
-                    } else {
-                      return [...prev, groupId];
-                    }
-                  });
-                }}
+                onToggleGroup={toggleGroup}
                 teamColors={teamColors}
               />
-            </View>
+            </GradientCard>
           )}
 
-          {/* Section E: Repeat Event */}
-          <View style={styles.card}>
-            {renderDropdown('Repeat Event', recurring, recurringOptions, setRecurring, false, showRecurringDropdown, setShowRecurringDropdown)}
-          </View>
+          {/* Collapsible Section: Repeat Event */}
+          <EventRecurringSection
+            recurring={recurring}
+            onRecurringChange={setRecurring}
+            openDropdown={openDropdown}
+            onOpenDropdown={setDropdown}
+            onCloseDropdown={closeDropdown}
+          />
 
-          {/* Section D: Attachments */}
-          <View style={styles.card}>
-            <View style={styles.attachmentsSection}>
-              <Text style={styles.sectionTitle}>Attachments</Text>
+          {/* Collapsible Section: Attachments */}
+          <GradientCard>
+            <TouchableOpacity
+              style={styles.collapsibleHeader}
+              onPress={() => toggleSection('attachments')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.collapsibleHeaderText}>Attachments</Text>
+              <Ionicons
+                name={expandedSections.attachments ? "chevron-up" : "chevron-down"}
+                size={20}
+                color={COLORS.TEXT_SECONDARY}
+              />
+            </TouchableOpacity>
+            {expandedSections.attachments && (
+              <View style={styles.collapsibleContent}>
               <TouchableOpacity 
                 style={styles.attachmentButton}
                 onPress={handlePickFiles}
@@ -737,10 +515,25 @@ const EventCreationModal = ({
                 </View>
               )}
             </View>
-          </View>
+            )}
+          </GradientCard>
 
-          {/* Section G: Attendance Settings */}
-          <View style={styles.card}>
+          {/* Collapsible Section: Attendance Settings */}
+          <GradientCard>
+            <TouchableOpacity
+              style={styles.collapsibleHeader}
+              onPress={() => toggleSection('attendance')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.collapsibleHeaderText}>Attendance Settings</Text>
+              <Ionicons
+                name={expandedSections.attendance ? "chevron-up" : "chevron-down"}
+                size={20}
+                color={COLORS.TEXT_SECONDARY}
+              />
+            </TouchableOpacity>
+            {expandedSections.attendance && (
+              <View style={styles.collapsibleContent}>
             <AttendanceSettingsSection
               attendanceRequirement={attendanceRequirement}
               onRequirementChange={setAttendanceRequirement}
@@ -749,168 +542,100 @@ const EventCreationModal = ({
               teamColors={teamColors}
             />
           </View>
+            )}
+          </GradientCard>
 
           {/* Old Event Visibility section removed - now using WhoSeesThisSection and AssignedGroupsGrid */}
-
-
-          {/* Old Group Selector Modal - keeping for potential future use but not shown */}
-          {false && showGroupSelector && (
-                <View style={styles.groupSelector}>
-                  {/* Search */}
-                  <View style={styles.searchContainer}>
-                    <Ionicons name="search" size={20} color={COLORS.TEXT_TERTIARY} />
-                    <TextInput
-                      style={styles.searchInput}
-                      value={groupSearchQuery}
-                      onChangeText={setGroupSearchQuery}
-                      placeholder="Search groups..."
-                      placeholderTextColor={COLORS.TEXT_TERTIARY}
-                    />
-                    {groupSearchQuery.length > 0 && (
-                      <TouchableOpacity onPress={() => setGroupSearchQuery('')}>
-                        <Ionicons name="close-circle" size={20} color={COLORS.TEXT_TERTIARY} />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-
-                  {/* Empty State or Group List */}
-                  {isLoadingGroups ? (
-                    <View style={styles.loadingContainer}>
-                      <ActivityIndicator size="small" color={COLORS.PRIMARY} />
-                    </View>
-                  ) : availableGroups.length === 0 ? (
-                    <View style={styles.emptyGroupsMessage}>
-                      <Ionicons name="information-circle-outline" size={24} color={COLORS.TEXT_TERTIARY} />
-                      <Text style={styles.emptyGroupsText}>
-                        No attendance groups created yet.{'\n'}
-                        Create groups in Team Settings → Attendance Groups.
-                      </Text>
-                    </View>
-                  ) : filteredGroups.length === 0 ? (
-                    <View style={styles.emptySearchMessage}>
-                      <Text style={styles.emptySearchText}>
-                        No groups found matching "{debouncedSearchQuery}"
-                      </Text>
-                    </View>
-                  ) : (
-                    <ScrollView style={styles.groupList} maxHeight={200}>
-                      {filteredGroups.map(group => {
-                        const isSelected = selectedGroups.includes(group.id);
-                        return (
-                          <TouchableOpacity
-                            key={group.id}
-                            style={styles.groupOption}
-                            onPress={() => toggleGroup(group.id)}
-                          >
-                            <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
-                              {isSelected && <Ionicons name="checkmark" size={16} color={COLORS.WHITE} />}
-                            </View>
-                            <Text style={styles.groupOptionText}>{group.name}</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
                     </ScrollView>
-                  )}
-
-                  {/* Actions */}
-                  <View style={styles.selectorActions}>
-                    <TouchableOpacity
-                      style={styles.selectorCancelButton}
-                      onPress={() => {
-                        setShowGroupSelector(false);
-                        setGroupSearchQuery('');
-                      }}
-                    >
-                      <Text style={styles.selectorCancelButtonText}>Cancel</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.selectorDoneButton}
-                      onPress={() => {
-                        setShowGroupSelector(false);
-                        setGroupSearchQuery('');
-                      }}
-                    >
-                      <Text style={styles.selectorDoneButtonText}>Done</Text>
-                    </TouchableOpacity>
                   </View>
-                </View>
-              )}
-        </ScrollView>
-        </View>
-      </View>
+      </SafeAreaView>
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  modalContainer: {
+  safe: {
     flex: 1,
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
   },
-  modalTint: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#000000', // Pure black background
-  },
-  modalContent: {
+  container: {
     flex: 1,
-    backgroundColor: '#000000', // Pure black background
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  // Hero Section - Exact match to EventDetails EventHero
+  heroSection: {
     paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 16,
-    backgroundColor: 'transparent',
-  },
-  closeButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.BACKGROUND_CARD,
-  },
-  headerTitle: {
-    ...TYPOGRAPHY.title,
-    fontSize: scaleFont(FONT_SIZES.LG),
-    fontWeight: FONT_WEIGHTS.BOLD,
-    color: COLORS.TEXT_PRIMARY,
-    letterSpacing: -0.3,
-  },
-  createButton: {
-    backgroundColor: COLORS.ICON_BACKGROUND_HOME,
-    paddingVertical: 8,
-    paddingHorizontal: 18,
-    borderRadius: 16,
-    borderWidth: 0,
-    minWidth: 70,
-    alignItems: 'center',
-  },
-  createButtonText: {
-    ...TYPOGRAPHY.button,
-    fontSize: scaleFont(FONT_SIZES.SM),
-    color: COLORS.TEXT_PRIMARY,
-    fontWeight: FONT_WEIGHTS.SEMIBOLD,
+    paddingBottom: 0,
+    marginBottom: 24,
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
   },
   content: {
     flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 12,
   },
-  section: {
-    marginBottom: 24,
+  scrollContent: {
+    paddingHorizontal: 0,
+  },
+  heroActionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 0,
+  },
+  heroActionButton: {
+    padding: 4,
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroActionButtonLeft: {
+    paddingTop: 4,
+    paddingBottom: 4,
+    paddingRight: 8,
+    paddingLeft: 0,
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+  },
+  heroTitle: {
+    ...TYPOGRAPHY.heading,
+    fontSize: scaleFont(32),
+    fontWeight: FONT_WEIGHTS.BOLD,
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: 6,
+    lineHeight: 38,
+  },
+  saveButtonText: {
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    fontWeight: FONT_WEIGHTS.MEDIUM,
+    color: COLORS.TEXT_PRIMARY,
+  },
+  collapsibleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  collapsibleHeaderText: {
+    ...TYPOGRAPHY.sectionTitle,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    fontWeight: FONT_WEIGHTS.BOLD,
+    color: COLORS.TEXT_PRIMARY,
+  },
+  collapsibleContent: {
+    marginTop: 16,
   },
   fieldContainer: {
     marginBottom: 16,
   },
   sectionTitle: {
     ...TYPOGRAPHY.sectionTitle,
-    marginBottom: 16,
+    fontSize: scaleFont(FONT_SIZES.SM),
+    fontWeight: FONT_WEIGHTS.BOLD,
+    color: COLORS.TEXT_PRIMARY,
+    marginBottom: 12,
   },
   fieldLabel: {
     fontSize: scaleFont(FONT_SIZES.XS),
@@ -924,9 +649,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
+    paddingHorizontal: 0,
     paddingVertical: 14,
-    backgroundColor: COLORS.BACKGROUND_CARD,
+    backgroundColor: 'transparent',
     borderRadius: 12,
     borderWidth: 0,
     minHeight: 48,
@@ -980,25 +705,8 @@ const styles = StyleSheet.create({
   },
   dropdownOptionText: {
     ...TYPOGRAPHY.body,
-    fontSize: scaleFont(FONT_SIZES.BASE),
-    color: COLORS.TEXT_PRIMARY,
-  },
-  textInput: {
-    ...TYPOGRAPHY.body,
-    fontSize: scaleFont(FONT_SIZES.BASE),
-    color: COLORS.TEXT_PRIMARY,
-    backgroundColor: COLORS.BACKGROUND_CARD,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderWidth: 0,
-    minHeight: 48,
-  },
-  inputText: {
-    ...TYPOGRAPHY.body,
     fontSize: scaleFont(FONT_SIZES.SM),
     color: COLORS.TEXT_PRIMARY,
-    fontWeight: FONT_WEIGHTS.REGULAR,
   },
   timeContainer: {
     flexDirection: 'row',
@@ -1038,9 +746,6 @@ const styles = StyleSheet.create({
     maxHeight: 200,
     overflow: 'hidden',
   },
-  timePickerScroll: {
-    maxHeight: 200,
-  },
   timeOption: {
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -1049,7 +754,7 @@ const styles = StyleSheet.create({
   },
   timeOptionText: {
     ...TYPOGRAPHY.body,
-    fontSize: scaleFont(FONT_SIZES.BASE),
+    fontSize: scaleFont(FONT_SIZES.SM),
     color: COLORS.TEXT_PRIMARY,
     textAlign: 'center',
   },
@@ -1085,84 +790,7 @@ const styles = StyleSheet.create({
     minHeight: 80,
     textAlignVertical: 'top',
   },
-  // Card Style (reusable)
-  card: {
-    backgroundColor: COLORS.BACKGROUND_CARD,
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  // Core Details Card Styles
-  coreDetailsCard: {
-    backgroundColor: COLORS.BACKGROUND_CARD,
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  // Modern iOS-style input fields
-  inputField: {
-    marginBottom: 0,
-  },
-  fieldDivider: {
-    height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    marginVertical: 16,
-  },
-  modernInput: {
-    ...TYPOGRAPHY.body,
-    fontSize: scaleFont(FONT_SIZES.SM),
-    color: COLORS.TEXT_PRIMARY,
-    backgroundColor: COLORS.BACKGROUND_CARD,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderWidth: 0,
-    minHeight: 44,
-  },
-  multilineInput: {
-    height: 44,
-    paddingTop: 10,
-    paddingBottom: 10,
-  },
-  dateTimeRow: {
-    marginBottom: 16,
-  },
-  dateInputField: {
-    marginBottom: 0,
-  },
-  timeRow: {
-    flexDirection: 'row',
-    marginBottom: 0,
-  },
-  timeInputField: {
-    flex: 1,
-    marginBottom: 0,
-    marginRight: 12,
-  },
-  useCurrentLocationButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    marginTop: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: COLORS.BACKGROUND_CARD,
-    borderRadius: 8,
-  },
-  useCurrentLocationText: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.TEXT_SECONDARY,
-  },
+  // Card Style (reusable) - Exact match to EventDetails cards
   textInputMultiline: {
     minHeight: 80,
     textAlignVertical: 'top',
@@ -1175,9 +803,9 @@ const styles = StyleSheet.create({
   attachmentButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.BACKGROUND_CARD,
+    backgroundColor: 'transparent',
     borderRadius: 12,
-    padding: 16,
+    padding: 0,
     marginBottom: 12,
     borderWidth: 0,
   },
@@ -1194,7 +822,7 @@ const styles = StyleSheet.create({
   attachmentItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    backgroundColor: 'transparent',
     borderRadius: 8,
     padding: 12,
     marginBottom: 8,
@@ -1249,7 +877,8 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.PRIMARY,
   },
   radioLabel: {
-    fontSize: scaleFont(FONT_SIZES.BASE),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
     fontWeight: FONT_WEIGHTS.REGULAR,
     color: COLORS.TEXT_PRIMARY,
   },
@@ -1270,7 +899,7 @@ const styles = StyleSheet.create({
   groupChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.BACKGROUND_CARD,
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
@@ -1287,7 +916,7 @@ const styles = StyleSheet.create({
   addGroupButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.BACKGROUND_CARD,
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
@@ -1304,7 +933,7 @@ const styles = StyleSheet.create({
   // Group Selector Styles
   groupSelector: {
     marginTop: 12,
-    backgroundColor: COLORS.BACKGROUND_CARD,
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
     borderRadius: 14,
     padding: 12,
     borderWidth: 1,
@@ -1313,7 +942,7 @@ const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.BACKGROUND_CARD,
+    backgroundColor: COLORS.BACKGROUND_PRIMARY,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
@@ -1322,7 +951,8 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    fontSize: scaleFont(FONT_SIZES.BASE),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
     fontWeight: FONT_WEIGHTS.REGULAR,
     color: COLORS.TEXT_PRIMARY,
   },
@@ -1379,7 +1009,8 @@ const styles = StyleSheet.create({
     borderColor: COLORS.PRIMARY,
   },
   groupOptionText: {
-    fontSize: scaleFont(FONT_SIZES.BASE),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
     fontWeight: FONT_WEIGHTS.REGULAR,
     color: COLORS.TEXT_PRIMARY,
     flex: 1,
@@ -1397,7 +1028,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   selectorCancelButtonText: {
-    fontSize: scaleFont(FONT_SIZES.BASE),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
     fontWeight: FONT_WEIGHTS.MEDIUM,
     color: COLORS.TEXT_SECONDARY,
   },
@@ -1408,7 +1040,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   selectorDoneButtonText: {
-    fontSize: scaleFont(FONT_SIZES.BASE),
+    ...TYPOGRAPHY.body,
+    fontSize: scaleFont(FONT_SIZES.SM),
     fontWeight: FONT_WEIGHTS.SEMIBOLD,
     color: COLORS.WHITE,
   },

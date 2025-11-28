@@ -17,7 +17,7 @@ import { TYPOGRAPHY, FONT_SIZES, FONT_WEIGHTS, scaleFont } from '../constants/ty
 import { useCalendarData } from '../hooks/useCalendarData';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { queryKeys } from '../hooks/queryKeys';
-import { createEvent, updateEvent, deleteEvent, formatEventData } from '../api/events';
+import { createEvent, updateEvent, deleteEvent, deleteRecurringInstance, formatEventData } from '../api/events';
 import { getUserAttendanceStatus } from '../api/attendance';
 import { useSupabase } from '../providers/SupabaseProvider';
 import { useRealtimeAttendanceMultiple } from '../hooks/useRealtimeAttendance';
@@ -139,22 +139,37 @@ const CalendarScreen = ({ navigation }) => {
       try {
         // Filter out events with temporary IDs (optimistic updates)
         // Temp IDs start with "temp-" and are not valid UUIDs
+        // For recurring event instances, we need to check both event.id (instanceId) and originalEventId
+        // We want to include all events (including instances) but exclude temp IDs
         const validEvents = teamEvents.filter(event => {
-          const id = event.id;
-          // Check if it's a valid UUID format (not a temp ID)
-          return id && typeof id === 'string' && !id.startsWith('temp-') && 
-                 /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+          // Check if event.id is a temp ID (exclude those)
+          if (event.id && typeof event.id === 'string' && event.id.startsWith('temp-')) {
+            return false;
+          }
+          // For recurring instances, event.id will be in format "uuid:YYYY-MM-DD"
+          // For non-recurring events, event.id will be a UUID
+          // Both are valid, we just need to ensure we have an originalEventId or valid id
+          const hasValidId = event.id && typeof event.id === 'string';
+          const hasOriginalEventId = event.originalEventId && typeof event.originalEventId === 'string' &&
+                                     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(event.originalEventId);
+          // Include if it has a valid originalEventId (for instances) or a valid UUID id (for non-recurring)
+          return hasValidId && (hasOriginalEventId || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(event.id));
         });
 
         // Fetch attendance status for all valid events in parallel
+        // Use originalEventId for the database query, but key the map by event.id (instanceId for instances)
+        // Pass instanceDate for recurring instances
         const statusPromises = validEvents.map(async (event) => {
-          const status = await getUserAttendanceStatus(supabase, event.id);
+          const originalEventId = event.originalEventId || event.id; // Use for database query
+          const instanceDate = event.instanceDate || null; // YYYY-MM-DD format for recurring instances
+          const status = await getUserAttendanceStatus(supabase, originalEventId, instanceDate);
+          // 🔥 FIX: Key by event.id (instanceId for instances) so lookups work correctly
           return { eventId: event.id, ...status };
         });
 
         const statuses = await Promise.all(statusPromises);
         
-        // Convert to map
+        // Convert to map - keyed by event.id (instanceId for instances)
         const statusMap = {};
         statuses.forEach(({ eventId, status, checkedInAt }) => {
           statusMap[eventId] = { status, checkedInAt };
@@ -201,7 +216,9 @@ const CalendarScreen = ({ navigation }) => {
         });
 
         const statusPromises = validEvents.map(async (event) => {
-          const status = await getUserAttendanceStatus(supabase, event.id);
+          const eventId = event.originalEventId || event.id;
+          const instanceDate = event.instanceDate || null; // YYYY-MM-DD format for recurring instances
+          const status = await getUserAttendanceStatus(supabase, eventId, instanceDate);
           return { eventId: event.id, ...status };
         });
 
@@ -455,6 +472,16 @@ const CalendarScreen = ({ navigation }) => {
     const startTimeDate = event.startTime ? new Date(event.startTime) : null;
     const endTimeDate = event.endTime ? new Date(event.endTime) : null;
     
+    // Extract instanceDate for recurring events (already in YYYY-MM-DD format)
+    const instanceDate = event.instanceDate || null;
+    
+    console.log('🔍 CalendarScreen - Navigating to EventDetails:', {
+      eventId: event.id,
+      instanceId: event.instanceId,
+      instanceDate,
+      isRecurring: event.isRecurringInstance || event.originalEventId,
+    });
+    
     const serializableEvent = {
       ...event,
       eventType: event.eventType || event.type,
@@ -464,6 +491,8 @@ const CalendarScreen = ({ navigation }) => {
       date: startTimeDate && !isNaN(startTimeDate.getTime()) 
         ? startTimeDate.toISOString()
         : null,
+      // 🔥 FIX: Explicitly preserve instanceDate for recurring events
+      instanceDate: instanceDate, // YYYY-MM-DD format, already a string
       postTo: event.type === 'personal' ? 'Personal' : 'Team'
     };
     
@@ -520,19 +549,213 @@ const CalendarScreen = ({ navigation }) => {
 
   // Optimistic delete event
   const handleDeleteEvent = useCallback(async (event) => {
-    // Show confirmation alert (business logic in parent)
+    // Detect if event is a recurring instance or series
+    const isRecurringInstance = event?.isRecurringInstance && event?.originalEventId;
+    const isRecurringSeries = event?.is_recurring && !event?.isRecurringInstance;
+    const originalEventId = event?.originalEventId || event?.id;
+    
+    // If it's a recurring instance, show options
+    if (isRecurringInstance) {
       Alert.alert(
-        'Delete Event',
-        `Are you sure you want to delete "${event.title}"?`,
+        'Delete Recurring Event',
+        `"${event.title}" is part of a recurring series. What would you like to delete?`,
         [
           {
             text: 'Cancel',
             style: 'cancel'
           },
           {
-            text: 'Delete',
+            text: 'This occurrence only',
+            onPress: async () => {
+              const instanceId = event.id;
+              const instanceDate = new Date(event.startTime);
+              
+              // Optimistically remove from UI
+              setDeletedEventIds(prev => new Set([...prev, instanceId]));
+              
+              try {
+                const { success, error } = await deleteRecurringInstance(
+                  supabase, 
+                  originalEventId, 
+                  instanceDate
+                );
+                
+                if (error || !success) {
+                  // Revert optimistic delete on error
+                  setDeletedEventIds(prev => {
+                    const newSet = new Set(prev);
+                    newSet.delete(instanceId);
+                    return newSet;
+                  });
+                  Alert.alert('Error', 'Failed to delete this occurrence. Please try again.');
+                  return;
+                }
+                
+                // Remove from deleted set after successful delete
+                setDeletedEventIds(prev => {
+                  const newSet = new Set(prev);
+                  newSet.delete(instanceId);
+                  return newSet;
+                });
+                
+                // Invalidate all event caches to refresh calendar
+                await invalidateEventCaches(teamId);
+                
+                // Refetch current queries
+                await refetch();
+              } catch (error) {
+                // Revert on error
+                setDeletedEventIds(prev => {
+                  const newSet = new Set(prev);
+                  newSet.delete(instanceId);
+                  return newSet;
+                });
+                Alert.alert('Error', 'Failed to delete this occurrence. Please try again.');
+              }
+            }
+          },
+          {
+            text: 'All occurrences',
             style: 'destructive',
             onPress: async () => {
+              // Show confirmation for deleting entire series
+              Alert.alert(
+                'Delete All Occurrences',
+                `Are you sure you want to delete all occurrences of "${event.title}"? This cannot be undone.`,
+                [
+                  {
+                    text: 'Cancel',
+                    style: 'cancel'
+                  },
+                  {
+                    text: 'Delete All',
+                    style: 'destructive',
+                    onPress: async () => {
+                      const eventId = originalEventId;
+                      
+                      // Optimistically remove from UI
+                      setDeletedEventIds(prev => new Set([...prev, eventId]));
+                      
+                      try {
+                        const { success, error } = await deleteEvent(supabase, eventId);
+                        
+                        if (error || !success) {
+                          // Revert optimistic delete on error
+                          setDeletedEventIds(prev => {
+                            const newSet = new Set(prev);
+                            newSet.delete(eventId);
+                            return newSet;
+                          });
+                          Alert.alert('Error', 'Failed to delete event. Please try again.');
+                          return;
+                        }
+                        
+                        // Remove from deleted set after successful delete
+                        setDeletedEventIds(prev => {
+                          const newSet = new Set(prev);
+                          newSet.delete(eventId);
+                          return newSet;
+                        });
+                        
+                        // Invalidate all event caches to refresh calendar and home screen
+                        await invalidateEventCaches(teamId);
+                        
+                        // Refetch current queries
+                        await refetch();
+                      } catch (error) {
+                        // Revert on error
+                        setDeletedEventIds(prev => {
+                          const newSet = new Set(prev);
+                          newSet.delete(eventId);
+                          return newSet;
+                        });
+                        Alert.alert('Error', 'Failed to delete event. Please try again.');
+                      }
+                    }
+                  }
+                ]
+              );
+            }
+          }
+        ]
+      );
+      return;
+    }
+    
+    // If it's a recurring series (original event), show confirmation
+    if (isRecurringSeries) {
+      Alert.alert(
+        'Delete Recurring Event',
+        `Are you sure you want to delete all occurrences of "${event.title}"? This cannot be undone.`,
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel'
+          },
+          {
+            text: 'Delete All',
+            style: 'destructive',
+            onPress: async () => {
+              const eventId = event.id;
+              
+              // Optimistically remove from UI
+              setDeletedEventIds(prev => new Set([...prev, eventId]));
+              
+              try {
+                const { success, error } = await deleteEvent(supabase, eventId);
+                
+                if (error || !success) {
+                  // Revert optimistic delete on error
+                  setDeletedEventIds(prev => {
+                    const newSet = new Set(prev);
+                    newSet.delete(eventId);
+                    return newSet;
+                  });
+                  Alert.alert('Error', 'Failed to delete event. Please try again.');
+                  return;
+                }
+                
+                // Remove from deleted set after successful delete
+                setDeletedEventIds(prev => {
+                  const newSet = new Set(prev);
+                  newSet.delete(eventId);
+                  return newSet;
+                });
+                
+                // Invalidate all event caches to refresh calendar and home screen
+                await invalidateEventCaches(teamId);
+                
+                // Refetch current queries
+                await refetch();
+              } catch (error) {
+                // Revert on error
+                setDeletedEventIds(prev => {
+                  const newSet = new Set(prev);
+                  newSet.delete(eventId);
+                  return newSet;
+                });
+                Alert.alert('Error', 'Failed to delete event. Please try again.');
+              }
+            }
+          }
+        ]
+      );
+      return;
+    }
+    
+    // Non-recurring event - existing logic
+    Alert.alert(
+      'Delete Event',
+      `Are you sure you want to delete "${event.title}"?`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
             const eventId = event.id;
             
             // Optimistically remove from UI
@@ -541,7 +764,7 @@ const CalendarScreen = ({ navigation }) => {
             try {
               const { success, error } = await deleteEvent(supabase, eventId);
               
-              if (error) {
+              if (error || !success) {
                 // Revert optimistic delete on error
                 setDeletedEventIds(prev => {
                   const newSet = new Set(prev);
@@ -574,11 +797,11 @@ const CalendarScreen = ({ navigation }) => {
               });
               Alert.alert('Error', 'Failed to delete event. Please try again.');
             }
-            }
           }
-        ]
-      );
-  }, [refetch, invalidateEventCaches, teamId]);
+        }
+      ]
+    );
+  }, [refetch, invalidateEventCaches, teamId, supabase]);
 
 
   // Show skeleton only when there's no cached data (first-time load)

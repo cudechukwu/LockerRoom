@@ -16,11 +16,60 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../constants/colors';
 import { TYPOGRAPHY, FONT_SIZES, FONT_WEIGHTS, scaleFont } from '../../constants/typography';
 
+// Format selected days for display: "Every Sunday and Friday" or "Every Sunday, Friday, and Wednesday"
+const formatRecurringDisplay = (recurring) => {
+  if (!recurring || recurring === 'None') {
+    return null;
+  }
+  
+  // Handle array format (new format)
+  if (Array.isArray(recurring)) {
+    if (recurring.length === 0) {
+      return null;
+    }
+    
+    // Day order for sorting
+    const DAY_ORDER = {
+      'Sunday': 0,
+      'Monday': 1,
+      'Tuesday': 2,
+      'Wednesday': 3,
+      'Thursday': 4,
+      'Friday': 5,
+      'Saturday': 6,
+    };
+    
+    // Sort days
+    const sorted = [...recurring].sort((a, b) => (DAY_ORDER[a] || 0) - (DAY_ORDER[b] || 0));
+    
+    if (sorted.length === 1) {
+      return `Every ${sorted[0]}`;
+    }
+    
+    if (sorted.length === 2) {
+      return `Every ${sorted[0]} and ${sorted[1]}`;
+    }
+    
+    // For 3+ days: "Every Sunday, Friday, and Wednesday"
+    const allButLast = sorted.slice(0, -1).join(', ');
+    const last = sorted[sorted.length - 1];
+    return `Every ${allButLast}, and ${last}`;
+  }
+  
+  // Handle legacy string format
+  if (typeof recurring === 'string') {
+    return recurring.charAt(0).toUpperCase() + recurring.slice(1).toLowerCase();
+  }
+  
+  return null;
+};
+
 const EventDetailsCard = ({ event }) => {
   if (!event) return null;
 
   const hasLocation = event.location && String(event.location).trim();
-  const hasRecurring = event.recurring && event.recurring !== 'None';
+  const recurringDisplay = formatRecurringDisplay(event.recurring);
+  const hasRecurring = !!recurringDisplay;
 
   // Don't render if there's nothing to show
   if (!hasLocation && !hasRecurring) return null;
@@ -30,7 +79,7 @@ const EventDetailsCard = ({ event }) => {
       {hasRecurring && (
         <View style={styles.detailRow}>
           <Ionicons name="repeat-outline" size={20} color={COLORS.TEXT_SECONDARY} />
-          <Text style={styles.detailText}>Repeats {event.recurring.toLowerCase()}</Text>
+          <Text style={styles.detailText}>Repeats {recurringDisplay}</Text>
         </View>
       )}
       {hasLocation && (

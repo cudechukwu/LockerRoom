@@ -10,6 +10,7 @@
 import { isUserInAnyGroup } from './attendanceGroups';
 import { getUserTeamRole } from './roles';
 import { getDeviceFingerprint as getDeviceFingerprintUtil } from '../utils/deviceFingerprint';
+import { base64Encode, base64Decode } from '../utils/base64';
 
 // Note: JWT signing should be done server-side via Supabase Edge Function
 // For now, we'll use a simple token format that can be verified server-side
@@ -17,12 +18,13 @@ import { getDeviceFingerprint as getDeviceFingerprintUtil } from '../utils/devic
 
 /**
  * Generate a QR token payload (will be signed server-side)
- * @param {string} eventId - Event ID
+ * @param {string} eventId - Event ID (original event ID, not instanceId)
  * @param {string} teamId - Team ID
  * @param {Date} expiresAt - Expiration date
+ * @param {string|null} instanceDate - Instance date (YYYY-MM-DD) for recurring events
  * @returns {Object} Token payload
  */
-export function generateQRTokenPayload(eventId, teamId, expiresAt) {
+export function generateQRTokenPayload(eventId, teamId, expiresAt, instanceDate = null) {
   // Use crypto for better entropy (if available in React Native environment)
   let nonce;
   if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
@@ -34,29 +36,37 @@ export function generateQRTokenPayload(eventId, teamId, expiresAt) {
     nonce = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
   }
 
-  return {
+  const payload = {
     event_id: eventId,
     team_id: teamId,
     expires_at: expiresAt.toISOString(),
     issued_at: new Date().toISOString(),
     nonce
   };
+  
+  // Include instance_date for recurring events to make QR codes unique per instance
+  if (instanceDate) {
+    payload.instance_date = instanceDate;
+  }
+  
+  return payload;
 }
 
 /**
  * Generate a signed QR token via Supabase Edge Function
- * @param {string} eventId - Event ID
+ * @param {string} eventId - Event ID (original event ID, not instanceId)
  * @param {string} teamId - Team ID
  * @param {Date} expiresAt - Expiration date
+ * @param {string|null} instanceDate - Instance date (YYYY-MM-DD) for recurring events
  * @returns {Promise<string>} Signed JWT token
  */
-export async function generateQRToken(eventId, teamId, expiresAt) {
+export async function generateQRToken(eventId, teamId, expiresAt, instanceDate = null) {
   try {
     // TODO: Call Supabase Edge Function to generate signed token
     // For now, return the payload as a base64-encoded string
     // In production, this should call: supabase.functions.invoke('generate-qr-token', { body: payload })
-    const payload = generateQRTokenPayload(eventId, teamId, expiresAt);
-    return btoa(JSON.stringify(payload));
+    const payload = generateQRTokenPayload(eventId, teamId, expiresAt, instanceDate);
+    return base64Encode(JSON.stringify(payload));
   } catch (error) {
     console.error('Error generating QR token:', error);
     throw error;
@@ -74,10 +84,10 @@ export function verifyQRToken(token) {
       return { valid: false, reason: 'invalid_token_format' };
     }
     
-    // Decode base64 token
+    // Decode base64 token (React Native compatible)
     let decoded;
     try {
-      decoded = JSON.parse(atob(token));
+      decoded = JSON.parse(base64Decode(token));
     } catch (parseError) {
       return { valid: false, reason: 'invalid_base64' };
     }
@@ -143,7 +153,7 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
       console.warn('⚠️ User ID mismatch between getUser() and getSession()');
     }
 
-    const { method, userId, status, qrToken, latitude, longitude, deviceFingerprint } = options;
+    const { method, userId, status, qrToken, latitude, longitude, deviceFingerprint, instanceDate } = options;
     
     // For manual check-ins, allow coaches to mark other users
     // Otherwise, use current user
@@ -154,15 +164,44 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
       throw { code: 'INVALID_MANUAL_CHECKIN', message: 'Manual check-ins cannot include location data' };
     }
 
+    // For recurring instances, we need to get the original event
+    // If eventId is an instanceId (contains ':'), extract the original event ID
+    let originalEventId = eventId;
+    if (eventId && eventId.includes(':')) {
+      // Instance ID format: "eventId:YYYY-MM-DD"
+      originalEventId = eventId.split(':')[0];
+    }
+    
     // Get event details (fetch all fields needed for group check and later use)
     const { data: event, error: eventError } = await supabase
       .from('events')
       .select('*')
-      .eq('id', eventId)
+      .eq('id', originalEventId)
       .single();
 
     if (eventError || !event) {
       throw { code: 'EVENT_NOT_FOUND', message: 'Event not found' };
+    }
+    
+    // Determine instance_date for recurring events
+    // If instanceDate is provided, use it; otherwise, if eventId is an instanceId, extract it
+    let finalInstanceDate = instanceDate;
+    if (!finalInstanceDate && eventId && eventId.includes(':')) {
+      // Extract date from instanceId format: "eventId:YYYY-MM-DD"
+      const datePart = eventId.split(':')[1];
+      if (datePart) {
+        finalInstanceDate = datePart;
+      }
+    }
+    
+    // For non-recurring events, instance_date should be NULL
+    // For recurring events, instance_date is required
+    if (event.is_recurring && !finalInstanceDate) {
+      // If it's a recurring event but no instance_date provided, use the event's start_time date
+      const eventStart = new Date(event.start_time);
+      finalInstanceDate = eventStart.toISOString().split('T')[0];
+    } else if (!event.is_recurring) {
+      finalInstanceDate = null;
     }
 
     // Check if user is authorized to check in
@@ -181,7 +220,12 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
       // Player checking themselves in - verify group membership
       if (!isFullTeam && Array.isArray(assignedGroups) && assignedGroups.length > 0) {
         // Check if user is in at least one assigned group
-        const { data: userInGroup, error: groupCheckError } = await isUserInAnyGroup(supabase, targetUserId, assignedGroups);
+        // 🔥 FIX: Properly handle async RPC return shape
+        const groupCheckResult = await isUserInAnyGroup(supabase, targetUserId, assignedGroups);
+        
+        // Handle both { data, error } and direct boolean return shapes
+        const userInGroup = groupCheckResult?.data ?? groupCheckResult ?? false;
+        const groupCheckError = groupCheckResult?.error ?? null;
         
         if (groupCheckError || !userInGroup) {
           // Get group names for helpful error message
@@ -206,7 +250,34 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
     // Manual check-ins by coaches are always allowed (even after event ends) for retroactive marking
     // QR code and location check-ins are only allowed during the event + grace period
     if (method !== 'manual') {
-      const eventEnd = new Date(event.end_time);
+      // 🔥 FIX: For recurring events, use instance-specific end_time
+      // For non-recurring events, use the original event's end_time
+      let eventEnd;
+      if (event.is_recurring && finalInstanceDate) {
+        // Calculate instance-specific end_time based on instanceDate and event duration
+        const originalStart = new Date(event.start_time);
+        const originalEnd = new Date(event.end_time);
+        const duration = originalEnd.getTime() - originalStart.getTime(); // Duration in milliseconds
+        
+        // Parse instanceDate (YYYY-MM-DD) and set the time from original event
+        const [year, month, day] = finalInstanceDate.split('-').map(Number);
+        const instanceStart = new Date(year, month - 1, day, originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds(), originalStart.getMilliseconds());
+        const instanceEnd = new Date(instanceStart.getTime() + duration);
+        
+        eventEnd = instanceEnd;
+        
+        console.log('✅ Using instance-specific end_time for check-in validation:', {
+          originalEnd: event.end_time,
+          instanceDate: finalInstanceDate,
+          instanceStart: instanceStart.toISOString(),
+          instanceEnd: instanceEnd.toISOString(),
+          now: now.toISOString(),
+        });
+      } else {
+        // Non-recurring event: use original end_time
+        eventEnd = new Date(event.end_time);
+      }
+      
       const gracePeriodMinutes = 15; // 15 minute grace period after event ends
       const gracePeriodEnd = new Date(eventEnd.getTime() + gracePeriodMinutes * 60 * 1000);
       
@@ -223,8 +294,40 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
       }
       
       const decoded = verification.data;
-      if (decoded.event_id !== eventId || decoded.team_id !== event.team_id) {
+      // 🔥 FIX: Compare with originalEventId, not instanceId
+      if (decoded.event_id !== originalEventId || decoded.team_id !== event.team_id) {
         throw { code: 'QR_MISMATCH', message: 'QR token does not match this event' };
+      }
+      
+      // 🔥 FIX: Validate instance_date for recurring events
+      // QR code must be for the specific instance being checked into
+      if (event.is_recurring) {
+        // Convert both to strings for comparison (handle null/undefined)
+        const decodedInstanceDate = decoded.instance_date || null;
+        const expectedInstanceDate = finalInstanceDate || null;
+        
+        if (decodedInstanceDate !== expectedInstanceDate) {
+          console.error('❌ QR Instance Mismatch:', {
+            decodedInstanceDate,
+            expectedInstanceDate,
+            eventId,
+            originalEventId,
+            finalInstanceDate,
+            decoded: decoded,
+          });
+          throw { 
+            code: 'QR_INSTANCE_MISMATCH', 
+            message: `QR token is for a different occurrence of this recurring event. Expected: ${expectedInstanceDate}, Got: ${decodedInstanceDate}` 
+          };
+        }
+      } else {
+        // For non-recurring events, instance_date should be null/undefined
+        if (decoded.instance_date) {
+          throw { 
+            code: 'QR_INSTANCE_MISMATCH', 
+            message: 'QR token is for a recurring event instance, but this is not a recurring event' 
+          };
+        }
       }
     }
 
@@ -258,13 +361,21 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
     }
 
     // Check if already checked in (excluding soft-deleted records)
-    const { data: existingAttendance } = await supabase
+    // 🔥 FIX: Use originalEventId and filter by instance_date for recurring events
+    let existingQuery = supabase
       .from('event_attendance')
       .select('id')
-      .eq('event_id', eventId)
+      .eq('event_id', originalEventId) // Use originalEventId, not instanceId
       .eq('user_id', targetUserId)
-      .eq('is_deleted', false)
-      .single();
+      .eq('is_deleted', false);
+    
+    if (finalInstanceDate) {
+      existingQuery = existingQuery.eq('instance_date', finalInstanceDate);
+    } else {
+      existingQuery = existingQuery.is('instance_date', null);
+    }
+    
+    const { data: existingAttendance } = await existingQuery.single();
 
     if (existingAttendance) {
       // For manual check-ins, update existing record instead of throwing error
@@ -300,11 +411,29 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
       isLate = status.includes('late');
       lateCategory = status.includes('late') ? status : 'on_time';
     } else {
-      // Calculate late status (normalize to UTC for consistent comparison)
-      const eventStart = new Date(event.start_time);
-      const eventStartUTC = new Date(eventStart.toISOString());
-      const nowUTC = new Date(now.toISOString());
-      lateMinutes = Math.floor((nowUTC.getTime() - eventStartUTC.getTime()) / (1000 * 60));
+      // 🔥 FIX: For recurring events, use instance-specific start_time
+      // For non-recurring events, use the original event's start_time
+      let eventStart;
+      if (event.is_recurring && finalInstanceDate) {
+        // Calculate instance-specific start_time based on instanceDate and original event time
+        const originalStart = new Date(event.start_time);
+        // Parse instanceDate (YYYY-MM-DD) and set the time from original event
+        const [year, month, day] = finalInstanceDate.split('-').map(Number);
+        eventStart = new Date(year, month - 1, day, originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds(), originalStart.getMilliseconds());
+        
+        console.log('✅ Using instance-specific start_time for late calculation:', {
+          originalStart: event.start_time,
+          instanceDate: finalInstanceDate,
+          instanceStart: eventStart.toISOString(),
+          now: now.toISOString(),
+        });
+      } else {
+        // Non-recurring event: use original start_time
+        eventStart = new Date(event.start_time);
+      }
+      
+      // Use local time for both event and now - no UTC conversion
+      lateMinutes = Math.floor((now.getTime() - eventStart.getTime()) / (1000 * 60));
       
       if (lateMinutes > 0) {
         isLate = true;
@@ -327,14 +456,22 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
     let flagReason = null;
     
     if (method !== 'manual' && deviceFingerprint) {
-      const { data: conflictingAttendance } = await supabase
+      // 🔥 FIX: Use originalEventId and filter by instance_date
+      let conflictQuery = supabase
         .from('event_attendance')
         .select('user_id')
-        .eq('event_id', eventId)
+        .eq('event_id', originalEventId) // Use originalEventId, not instanceId
         .eq('device_fingerprint', deviceFingerprint)
         .eq('is_deleted', false) // Only check non-deleted records
-        .neq('user_id', user.id)
-        .single();
+        .neq('user_id', user.id);
+      
+      if (finalInstanceDate) {
+        conflictQuery = conflictQuery.eq('instance_date', finalInstanceDate);
+      } else {
+        conflictQuery = conflictQuery.is('instance_date', null);
+      }
+      
+      const { data: conflictingAttendance } = await conflictQuery.single();
 
       if (conflictingAttendance) {
         isFlagged = true;
@@ -354,21 +491,27 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
       // Guard against NaN
       if (!isNaN(distance)) {
         const radius = event.check_in_radius || 100;
-        if (distance > radius * 1.5) { // Allow 50% buffer
+        // 🔥 FIX: Use reasonable buffer (20% instead of arbitrary 50%)
+        // This prevents false-flagging players at the edge of the field
+        const bufferMultiplier = 1.2; // 20% buffer for GPS accuracy variance
+        if (distance > radius * bufferMultiplier) {
           isFlagged = true;
           flagReason = flagReason 
-            ? `${flagReason}; GPS mismatch with QR (${Math.round(distance)}m from event)`
-            : `GPS mismatch with QR (${Math.round(distance)}m from event)`;
+            ? `${flagReason}; GPS mismatch with QR (${Math.round(distance)}m from event, radius: ${radius}m)`
+            : `GPS mismatch with QR (${Math.round(distance)}m from event, radius: ${radius}m)`;
         }
       }
     }
 
     // Create attendance record
     // IMPORTANT: For manual check-ins, device_fingerprint MUST be NULL (per CHECK constraint)
+    // 🔥 FIX: Use originalEventId for database operations (event_id column expects UUID, not instanceId)
     const attendanceData = {
-      event_id: eventId,
+      event_id: originalEventId, // Use original event ID, not instanceId
       user_id: targetUserId,
       team_id: event.team_id,
+      // 🔥 FIX: Include instance_date for recurring events
+      instance_date: finalInstanceDate || null, // For recurring events, this is required; for non-recurring, it's NULL
       check_in_method: method,
       checked_in_at: now.toISOString(),
       status: finalStatus,
@@ -433,39 +576,10 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
     }
 
     // CRITICAL FIX: Ensure session is restored and token is available before INSERT
-    // The Supabase client must have the session token in the Authorization header
-    // Otherwise auth.uid() will be NULL in RLS policies
-    
-    // Force refresh the session to ensure it's current
-    const { data: { session: currentSession }, error: sessionRefreshError } = await supabase.auth.getSession();
-    
-    if (sessionRefreshError) {
-      console.error('❌ CAUSE 1: Error refreshing session:', sessionRefreshError);
-      throw new Error('Failed to refresh session - cannot authenticate request');
-    }
-    
-    if (!currentSession?.access_token) {
-      console.error('❌ CAUSE 1: No access token in session - RLS will fail with auth.uid() = NULL');
-      throw new Error('No access token available - cannot authenticate request');
-    }
-    
-    // Verify the session user matches
-    if (currentSession.user.id !== user.id) {
-      console.error('❌ CAUSE 1: Session user mismatch', {
-        sessionUserId: currentSession.user.id,
-        expectedUserId: user.id
-      });
-      throw new Error('Session user mismatch - cannot authenticate request');
-    }
-    
-    // 🔥 CRITICAL: Set the session explicitly on the client to ensure Authorization header is sent
-    // This ensures auth.uid() is available in RLS policies
-    await supabase.auth.setSession({
-      access_token: currentSession.access_token,
-      refresh_token: currentSession.refresh_token,
-    });
-    
-    console.log('✅ Session explicitly set on client for RLS context');
+    // 🔥 FIX: Only get session once - no double refresh or setSession calls
+    // The Supabase client already has the session from getSession() call at the top
+    // Multiple session operations can cause race conditions and token churn
+    // If session is needed, it's already available from the initial getSession() call
 
     // 🔥 CRITICAL: For manual check-ins, verify coach role BEFORE attempting insert
     // This helps debug RLS issues and provides better error messages
@@ -512,8 +626,10 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
     // The RPC function uses SECURITY DEFINER and explicitly checks permissions
     if (method === 'manual' && targetUserId !== user.id) {
       // Use RPC function for manual check-ins by coaches
+      // 🔥 FIX: Use originalEventId for RPC call (RPC expects UUID, not instanceId)
+      // RPC function now supports p_instance_date parameter for recurring events
       const { data: rpcData, error: rpcError } = await supabase.rpc('insert_event_attendance_manual', {
-        p_event_id: eventId,
+        p_event_id: originalEventId, // Use original event ID, not instanceId
         p_user_id: targetUserId,
         p_team_id: event.team_id,
         p_status: finalStatus,
@@ -521,7 +637,8 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
         p_checked_in_at: now.toISOString(),
         p_is_late: isLate,
         p_late_minutes: lateMinutes > 0 ? lateMinutes : null,
-        p_late_category: lateCategory
+        p_late_category: lateCategory,
+        p_instance_date: finalInstanceDate || null  // 🔥 NEW: Pass instance_date for recurring events
       });
 
       if (rpcError) {
@@ -548,6 +665,16 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
     // With AsyncStorage explicitly passed to the Supabase client,
     // the session should now be properly included in the Authorization header
     // This ensures auth.uid() is available in RLS policies
+    
+    // 🔥 DEBUG: Log the attendance data being inserted
+    console.log('🔍 Inserting attendance data:', {
+      event_id: attendanceData.event_id,
+      user_id: attendanceData.user_id,
+      instance_date: attendanceData.instance_date,
+      is_recurring: event.is_recurring,
+      method: method
+    });
+    
     const { data, error } = await supabase
       .from('event_attendance')
       .insert(attendanceData)
@@ -570,6 +697,89 @@ export async function checkInToEvent(supabaseClient, eventId, options = {}) {
       
       // Handle unique constraint violation (concurrent check-ins)
       if (error.code === '23505') { // PostgreSQL unique violation
+        // 🔥 DEBUG: Check for existing attendance record to see what's conflicting
+        console.error('🚨 Unique constraint violation - checking for existing attendance:', {
+          event_id: attendanceData.event_id,
+          user_id: attendanceData.user_id,
+          instance_date: attendanceData.instance_date,
+          error_message: error.message,
+          error_detail: error.details
+        });
+        
+        // Query to see what existing record might be conflicting
+        let conflictQuery = supabase
+          .from('event_attendance')
+          .select('id, event_id, user_id, instance_date, checked_in_at, status, is_deleted')
+          .eq('event_id', attendanceData.event_id)
+          .eq('user_id', attendanceData.user_id)
+          .eq('is_deleted', false);
+        
+        if (attendanceData.instance_date) {
+          // For recurring events, check both with and without instance_date
+          // (in case old constraint is still active)
+          conflictQuery = conflictQuery.or(`instance_date.eq.${attendanceData.instance_date},instance_date.is.null`);
+        } else {
+          conflictQuery = conflictQuery.is('instance_date', null);
+        }
+        
+        const { data: existingRecords, error: queryError } = await conflictQuery;
+        
+        if (!queryError && existingRecords && existingRecords.length > 0) {
+          console.error('🚨 Found existing attendance records:', existingRecords);
+          // If there's a record with the same instance_date, that's the issue
+          const sameInstance = existingRecords.find(r => r.instance_date === attendanceData.instance_date);
+          if (sameInstance) {
+            throw { 
+              code: 'ALREADY_CHECKED_IN', 
+              message: `Already checked in to this event instance (checked in at ${new Date(sameInstance.checked_in_at).toLocaleString()})` 
+            };
+          } else {
+            // Found a record with a different instance_date (or null)
+            // This means there's an old record from before instance-specific attendance was implemented
+            const oldRecord = existingRecords.find(r => r.instance_date === null || r.instance_date !== attendanceData.instance_date);
+            if (oldRecord && oldRecord.instance_date === null && event.is_recurring) {
+              // Old record with null instance_date for a recurring event
+              // We need to delete it or update it, but we don't know which instance it was for
+              // For now, delete the old record and allow the new check-in
+              console.warn('⚠️ Found old attendance record with null instance_date for recurring event. Deleting it to allow instance-specific check-in.');
+              const { error: deleteError } = await supabase
+                .from('event_attendance')
+                .delete()
+                .eq('id', oldRecord.id);
+              
+              if (deleteError) {
+                console.error('❌ Error deleting old attendance record:', deleteError);
+                throw { 
+                  code: 'ALREADY_CHECKED_IN', 
+                  message: `You have an old check-in record for this recurring event. Please contact support to resolve this issue.` 
+                };
+              }
+              
+              // Retry the insert after deleting the old record
+              console.log('🔄 Retrying check-in after deleting old record...');
+              const { data: retryData, error: retryError } = await supabase
+                .from('event_attendance')
+                .insert(attendanceData)
+                .select()
+                .single();
+              
+              if (retryError) {
+                console.error('❌ Error on retry after deleting old record:', retryError);
+                throw retryError;
+              }
+              
+              return { data: retryData, error: null };
+            } else {
+              // Different instance_date - this is a different instance, should be allowed
+              // But the constraint is blocking it, which means the migration wasn't run correctly
+              throw { 
+                code: 'ALREADY_CHECKED_IN', 
+                message: 'Database constraint error: Unable to check in to this instance. The database migration may need to be re-run.' 
+              };
+            }
+          }
+        }
+        
         throw { code: 'ALREADY_CHECKED_IN', message: 'Already checked in to this event (concurrent check-in detected)' };
       }
       throw error;
@@ -601,14 +811,35 @@ export async function checkOutOfEvent(supabaseClient, eventId) {
       throw new Error('User not authenticated');
     }
 
+    // Extract original event ID and instance_date if eventId is an instanceId
+    let originalEventId = eventId;
+    let finalInstanceDate = instanceDate;
+    
+    if (eventId && eventId.includes(':')) {
+      // Instance ID format: "eventId:YYYY-MM-DD"
+      const parts = eventId.split(':');
+      originalEventId = parts[0];
+      if (!finalInstanceDate && parts[1]) {
+        finalInstanceDate = parts[1];
+      }
+    }
+
     // Check if already checked out
-    const { data: existingAttendance } = await supabase
+    // 🔥 FIX: Use originalEventId and filter by instance_date
+    let existingQuery = supabase
       .from('event_attendance')
       .select('checked_out_at, is_deleted')
-      .eq('event_id', eventId)
+      .eq('event_id', originalEventId) // Use originalEventId, not instanceId
       .eq('user_id', user.id)
-      .eq('is_deleted', false)
-      .single();
+      .eq('is_deleted', false);
+    
+    if (finalInstanceDate) {
+      existingQuery = existingQuery.eq('instance_date', finalInstanceDate);
+    } else {
+      existingQuery = existingQuery.is('instance_date', null);
+    }
+    
+    const { data: existingAttendance } = await existingQuery.single();
 
     if (!existingAttendance) {
       throw { code: 'ATTENDANCE_NOT_FOUND', message: 'No attendance record found' };
@@ -622,14 +853,21 @@ export async function checkOutOfEvent(supabaseClient, eventId) {
       throw { code: 'ALREADY_CHECKED_OUT', message: 'Already checked out of this event' };
     }
 
-    const { data, error } = await supabase
+    // 🔥 FIX: Use originalEventId and filter by instance_date
+    let updateQuery = supabase
       .from('event_attendance')
       .update({ checked_out_at: new Date().toISOString() })
-      .eq('event_id', eventId)
+      .eq('event_id', originalEventId) // Use originalEventId, not instanceId
       .eq('user_id', user.id)
-      .eq('is_deleted', false) // Only update non-deleted records
-      .select()
-      .single();
+      .eq('is_deleted', false); // Only update non-deleted records
+    
+    if (finalInstanceDate) {
+      updateQuery = updateQuery.eq('instance_date', finalInstanceDate);
+    } else {
+      updateQuery = updateQuery.is('instance_date', null);
+    }
+    
+    const { data, error } = await updateQuery.select().single();
 
     if (error) throw error;
 
@@ -663,8 +901,23 @@ export async function getEventAttendance(supabaseClient, eventId, filters = {}) 
       throw new Error('User not authenticated');
     }
 
+    // Extract original event ID and instance_date if eventId is an instanceId
+    let originalEventId = eventId;
+    let instanceDate = filters.instanceDate || null;
+    
+    if (eventId && eventId.includes(':')) {
+      // Instance ID format: "eventId:YYYY-MM-DD"
+      const parts = eventId.split(':');
+      originalEventId = parts[0];
+      if (!instanceDate && parts[1]) {
+        instanceDate = parts[1];
+      }
+    }
+    
     console.log('🔍 getEventAttendance called:', {
       eventId,
+      originalEventId,
+      instanceDate,
       userId: user.id,
       filters,
     });
@@ -674,8 +927,17 @@ export async function getEventAttendance(supabaseClient, eventId, filters = {}) 
     let query = supabase
       .from('event_attendance')
       .select('*')
-      .eq('event_id', eventId)
+      .eq('event_id', originalEventId) // 🔥 FIX: Use originalEventId, not instanceId
       .eq('is_deleted', false); // Exclude soft-deleted records
+    
+    // Filter by instance_date for recurring events
+    if (instanceDate) {
+      query = query.eq('instance_date', instanceDate);
+    } else if (filters.instanceDate === null) {
+      // Explicitly filter for non-recurring events only
+      query = query.is('instance_date', null);
+    }
+    // Otherwise, get all (both recurring and non-recurring) - useful for viewing all instances
 
     // Apply filters
     if (filters.status) {
@@ -688,10 +950,11 @@ export async function getEventAttendance(supabaseClient, eventId, filters = {}) 
     let positionGroupFilter = null;
     if (filters.positionGroup || filters.positionCategory) {
       // Get the event to get team_id
+      // 🔥 FIX: Use originalEventId, not instanceId
       const { data: event } = await supabase
         .from('events')
         .select('team_id')
-        .eq('id', eventId)
+        .eq('id', originalEventId)
         .single();
 
       if (!event) {
@@ -728,6 +991,8 @@ export async function getEventAttendance(supabaseClient, eventId, filters = {}) 
 
     console.log('🔍 Attendance query result:', {
       eventId,
+      originalEventId,
+      instanceDate,
       hasError: !!error,
       error: error ? { code: error.code, message: error.message, details: error.details, hint: error.hint } : null,
       dataCount: data?.length || 0,
@@ -737,6 +1002,7 @@ export async function getEventAttendance(supabaseClient, eventId, filters = {}) 
         status: a.status,
         is_deleted: a.is_deleted,
         checked_in_at: a.checked_in_at,
+        instance_date: a.instance_date,
       })) || [],
     });
 
@@ -744,13 +1010,20 @@ export async function getEventAttendance(supabaseClient, eventId, filters = {}) 
       console.error('❌ Attendance query error:', error);
       throw error;
     }
+    
+    // 🔥 FIX: Check for RLS failures (empty data with no error = RLS denial)
+    if (!data && !error) {
+      console.warn('⚠️ getEventAttendance: RLS may have denied the request (empty data, no error)');
+      // Return empty array instead of null for consistency
+      return { data: [], error: null };
+    }
 
     // Apply position group filter if needed
-    let filteredData = data;
+    let filteredData = data ?? [];
     if (positionGroupFilter && positionGroupFilter.length > 0) {
-      filteredData = data?.filter(attendance => 
+      filteredData = filteredData.filter(attendance => 
         positionGroupFilter.includes(attendance.user_id)
-      ) || [];
+      );
     }
 
     console.log('✅ Returning attendance data:', {
@@ -768,10 +1041,11 @@ export async function getEventAttendance(supabaseClient, eventId, filters = {}) 
 /**
  * Get current user's attendance status for a specific event
  * @param {Object} supabaseClient - Supabase client instance (from useSupabase() hook)
- * @param {string} eventId - Event ID
+ * @param {string} eventId - Event ID (can be instanceId for recurring events)
+ * @param {string|null} instanceDate - Instance date (YYYY-MM-DD) for recurring events
  * @returns {Promise<Object>} Attendance status { status: string | null, checkedInAt: string | null }
  */
-export async function getUserAttendanceStatus(supabaseClient, eventId) {
+export async function getUserAttendanceStatus(supabaseClient, eventId, instanceDate = null) {
   if (!supabaseClient) {
     throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
   }
@@ -784,13 +1058,34 @@ export async function getUserAttendanceStatus(supabaseClient, eventId) {
       return { status: null, checkedInAt: null };
     }
 
-    const { data, error } = await supabase
+    // Extract original event ID and instance_date if eventId is an instanceId
+    let originalEventId = eventId;
+    let finalInstanceDate = instanceDate;
+    
+    if (eventId && eventId.includes(':')) {
+      // Instance ID format: "eventId:YYYY-MM-DD"
+      const parts = eventId.split(':');
+      originalEventId = parts[0];
+      if (!finalInstanceDate && parts[1]) {
+        finalInstanceDate = parts[1];
+      }
+    }
+    
+    // 🔥 FIX: Use originalEventId and filter by instance_date
+    let query = supabase
       .from('event_attendance')
       .select('status, checked_in_at')
-      .eq('event_id', eventId)
+      .eq('event_id', originalEventId) // Use originalEventId, not instanceId
       .eq('user_id', user.id)
-      .eq('is_deleted', false)
-      .single();
+      .eq('is_deleted', false);
+    
+    if (finalInstanceDate) {
+      query = query.eq('instance_date', finalInstanceDate);
+    } else {
+      query = query.is('instance_date', null);
+    }
+    
+    const { data, error } = await query.single();
 
     if (error && error.code !== 'PGRST116') { // PGRST116 = no rows
       console.error('Error getting user attendance status:', error);
@@ -814,7 +1109,13 @@ export async function getUserAttendanceStatus(supabaseClient, eventId) {
  * @param {Date} [endDate] - End date
  * @returns {Promise<Object>} Attendance history
  */
-export async function getAttendanceHistory(userId = null, startDate = null, endDate = null) {
+export async function getAttendanceHistory(supabaseClient, userId = null, startDate = null, endDate = null) {
+  if (!supabaseClient) {
+    throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
+  }
+  
+  const supabase = supabaseClient;
+  
   try {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -851,8 +1152,15 @@ export async function getAttendanceHistory(userId = null, startDate = null, endD
     const { data, error } = await query;
 
     if (error) throw error;
+    
+    // 🔥 FIX: Check for RLS failures (empty data with no error = RLS denial)
+    if (!data && !error) {
+      console.warn('⚠️ getEventAttendance: RLS may have denied the request (empty data, no error)');
+      // Return empty array instead of null for consistency
+      return { data: [], error: null };
+    }
 
-    return { data, error: null };
+    return { data: data ?? [], error: null };
   } catch (error) {
     console.error('Error getting attendance history:', error);
     return { data: null, error };
@@ -891,10 +1199,12 @@ export function calculateDistance(lat1, lon1, lat2, lon2) {
 
 /**
  * Generate QR code for an event (coach only)
- * @param {string} eventId - Event ID
+ * @param {string} eventId - Event ID (can be instanceId for recurring events)
+ * @param {string|null} instanceDate - Instance date (YYYY-MM-DD) for recurring events
+ * @param {Date|null} instanceEndTime - Instance-specific end time (optional, will be calculated if not provided)
  * @returns {Promise<Object>} QR token and image data
  */
-export async function generateEventQRCode(supabaseClient, eventId) {
+export async function generateEventQRCode(supabaseClient, eventId, instanceDate = null, instanceEndTime = null) {
   if (!supabaseClient) {
     throw new Error('Supabase client is required. Use useSupabase() hook and pass the client to this function.');
   }
@@ -906,16 +1216,60 @@ export async function generateEventQRCode(supabaseClient, eventId) {
       throw { code: 'UNAUTHORIZED', message: 'User not authenticated' };
     }
 
+    // Extract original event ID and instance_date if eventId is an instanceId
+    let originalEventId = eventId;
+    let finalInstanceDate = instanceDate;
+    
+    if (eventId && eventId.includes(':')) {
+      // Instance ID format: "eventId:YYYY-MM-DD"
+      const parts = eventId.split(':');
+      originalEventId = parts[0];
+      if (!finalInstanceDate && parts[1]) {
+        finalInstanceDate = parts[1];
+      }
+    }
+    
     // Get event details (include created_by to check if user is event creator)
+    // 🔥 FIX: Use originalEventId, not instanceId
     const { data: event, error: eventError } = await supabase
       .from('events')
-      .select('*, team_id, created_by')
-      .eq('id', eventId)
+      .select('*, team_id, created_by, is_recurring')
+      .eq('id', originalEventId)
       .single();
 
     if (eventError || !event) {
       throw { code: 'EVENT_NOT_FOUND', message: 'Event not found' };
     }
+
+    // Validate instance_date for recurring events
+    if (event.is_recurring && !finalInstanceDate) {
+      console.error('❌ Missing instance_date for recurring event:', {
+        eventId,
+        originalEventId,
+        instanceDate,
+        finalInstanceDate,
+        eventIsRecurring: event.is_recurring,
+      });
+      throw { 
+        code: 'INSTANCE_DATE_REQUIRED', 
+        message: 'Instance date is required for recurring events' 
+      };
+    }
+    
+    if (!event.is_recurring && finalInstanceDate) {
+      throw { 
+        code: 'INVALID_INSTANCE_DATE', 
+        message: 'Instance date cannot be provided for non-recurring events' 
+      };
+    }
+    
+    console.log('✅ Generating QR code:', {
+      eventId,
+      originalEventId,
+      instanceDate,
+      finalInstanceDate,
+      eventIsRecurring: event.is_recurring,
+    });
 
     // Allow event creator to generate QR codes (for captains, etc.)
     const isEventCreator = event.created_by === user.id;
@@ -931,9 +1285,45 @@ export async function generateEventQRCode(supabaseClient, eventId) {
       throw { code: 'PERMISSION_DENIED', message: 'Only event creators, coaches, and admins can generate QR codes' };
     }
 
-    const expiresAt = new Date(event.end_time);
-    // CRITICAL FIX: await the async function
-    const qrToken = await generateQRToken(eventId, event.team_id, expiresAt);
+    // 🔥 FIX: For recurring events, use instance-specific end_time
+    // For non-recurring events, use the event's end_time directly
+    let expiresAt;
+    if (event.is_recurring && finalInstanceDate) {
+      // If instanceEndTime is provided, use it directly (more accurate)
+      if (instanceEndTime) {
+        expiresAt = new Date(instanceEndTime);
+        console.log('✅ Using provided instance end_time for QR code:', {
+          instanceEndTime: expiresAt.toISOString(),
+          instanceDate: finalInstanceDate,
+        });
+      } else {
+        // Calculate instance-specific end_time based on instanceDate and event duration
+        const originalStart = new Date(event.start_time);
+        const originalEnd = new Date(event.end_time);
+        const duration = originalEnd.getTime() - originalStart.getTime(); // Duration in milliseconds
+        
+        // Parse instanceDate (YYYY-MM-DD) and set the time from original event
+        const [year, month, day] = finalInstanceDate.split('-').map(Number);
+        const instanceStart = new Date(year, month - 1, day, originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds(), originalStart.getMilliseconds());
+        const instanceEnd = new Date(instanceStart.getTime() + duration);
+        
+        expiresAt = instanceEnd;
+        
+        console.log('✅ Calculated instance-specific end_time for QR code:', {
+          originalEnd: event.end_time,
+          instanceDate: finalInstanceDate,
+          instanceStart: instanceStart.toISOString(),
+          instanceEnd: instanceEnd.toISOString(),
+          duration: duration / (1000 * 60), // Duration in minutes
+        });
+      }
+    } else {
+      // Non-recurring event: use original end_time
+      expiresAt = new Date(event.end_time);
+    }
+    
+    // 🔥 FIX: Include instanceDate in QR token generation for recurring events
+    const qrToken = await generateQRToken(originalEventId, event.team_id, expiresAt, finalInstanceDate);
 
     // TODO: Generate QR code image using a library like qrcode
     // For now, return the token

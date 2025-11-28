@@ -20,12 +20,13 @@ import { queryKeys } from './queryKeys';
 
 /**
  * Hook to handle event check-in and check-out
- * @param {string|null} eventId - Event ID
+ * @param {string|null} eventId - Event ID (can be instanceId for recurring events)
  * @param {string|null} teamId - Team ID
  * @param {AbortSignal|null} abortSignal - Abort signal for cancellation
+ * @param {string|null} instanceDate - Instance date (YYYY-MM-DD) for recurring events
  * @returns {Object} Mutations and loading states
  */
-export const useEventCheckIn = (eventId, teamId, abortSignal = null) => {
+export const useEventCheckIn = (eventId, teamId, abortSignal = null, instanceDate = null) => {
   const supabase = useSupabase();
   const queryClient = useQueryClient();
 
@@ -46,6 +47,7 @@ export const useEventCheckIn = (eventId, teamId, abortSignal = null) => {
         method: 'qr_code',
         qrToken,
         deviceFingerprint,
+        instanceDate,
       });
 
       // Check again after request completes
@@ -114,6 +116,7 @@ export const useEventCheckIn = (eventId, teamId, abortSignal = null) => {
         latitude,
         longitude,
         deviceFingerprint,
+        instanceDate,
       });
 
       // Check again after request completes
@@ -155,7 +158,7 @@ export const useEventCheckIn = (eventId, teamId, abortSignal = null) => {
         throw new Error('Event ID and Team ID are required');
       }
 
-      const result = await checkOutOfEvent(supabase, eventId);
+      const result = await checkOutOfEvent(supabase, eventId, instanceDate);
 
       // Check again after request completes
       if (abortSignal?.aborted) {

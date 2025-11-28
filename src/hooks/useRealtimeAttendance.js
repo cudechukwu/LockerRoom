@@ -14,50 +14,91 @@ const invalidateTimers = new Map();
 
 /**
  * Subscribe to real-time attendance changes for a specific event
- * @param {string} eventId - Event ID to subscribe to
+ * @param {string} eventId - Event ID to subscribe to (can be instanceId for recurring events)
  * @param {boolean} enabled - Whether the subscription should be active
+ * @param {string|null} instanceDate - Instance date (YYYY-MM-DD) for recurring events
  */
-export function useRealtimeAttendance(eventId, enabled = true) {
+export function useRealtimeAttendance(eventId, enabled = true, instanceDate = null) {
   const supabase = useSupabase();
   const queryClient = useQueryClient();
 
   useEffect(() => {
     if (!enabled || !eventId || !supabase) return;
 
+    // Extract original event ID if eventId is an instanceId
+    let originalEventId = eventId;
+    let finalInstanceDate = instanceDate;
+    
+    if (eventId && eventId.includes(':')) {
+      // Instance ID format: "eventId:YYYY-MM-DD"
+      const parts = eventId.split(':');
+      originalEventId = parts[0];
+      if (!finalInstanceDate && parts[1]) {
+        finalInstanceDate = parts[1];
+      }
+    }
+
     if (__DEV__) {
-    console.log('🔔 Setting up real-time subscription for event:', eventId);
+    console.log('🔔 Setting up real-time subscription for event:', {
+      eventId,
+      originalEventId,
+      instanceDate: finalInstanceDate,
+    });
     }
 
     // Subscribe to changes in event_attendance table for this event
+    // For recurring events, we subscribe to the original event_id
+    // The payload will include instance_date, so we can filter client-side if needed
     const channel = supabase
-      .channel(`event_attendance:${eventId}`)
+      .channel(`event_attendance:${originalEventId}${finalInstanceDate ? `:${finalInstanceDate}` : ''}`)
       .on(
         'postgres_changes',
         {
           event: '*', // Listen to INSERT, UPDATE, DELETE
           schema: 'public',
           table: 'event_attendance',
-          filter: `event_id=eq.${eventId}`,
+          filter: `event_id=eq.${originalEventId}`, // Subscribe to original event_id
         },
         (payload) => {
+          const payloadInstanceDate = payload.new?.instance_date || payload.old?.instance_date;
+          
+          // For recurring events with instanceDate, only process if it matches
+          if (finalInstanceDate && payloadInstanceDate !== finalInstanceDate) {
+            // This attendance change is for a different instance, ignore it
+            return;
+          }
+          
+          // For non-recurring events, only process if instance_date is null
+          if (!finalInstanceDate && payloadInstanceDate !== null) {
+            // This attendance change is for a recurring instance, ignore it
+            return;
+          }
+
           if (__DEV__) {
           console.log('📢 Real-time attendance change:', {
             event: payload.eventType,
             new: payload.new,
             old: payload.old,
             eventId,
+            originalEventId,
+            instanceDate: finalInstanceDate,
+            payloadInstanceDate,
           });
           }
+
+          // Create a unique key for this event+instance combination
+          const cacheKey = finalInstanceDate ? `${originalEventId}:${finalInstanceDate}` : originalEventId;
 
           // Debounced invalidation to avoid refetch storms
           // Multiple real-time events (e.g., UPDATE for checked_in_at + status) within 75ms
           // collapse into a single refetch, preventing database hammering and battery drain
-          if (invalidateTimers.has(eventId)) {
-            clearTimeout(invalidateTimers.get(eventId));
+          if (invalidateTimers.has(cacheKey)) {
+            clearTimeout(invalidateTimers.get(cacheKey));
           }
 
           const timer = setTimeout(() => {
           // Invalidate the attendance query to refetch fresh data
+          // Use the original eventId (which may be an instanceId) for query key
           queryClient.invalidateQueries({
             queryKey: queryKeys.eventAttendance(eventId),
           });
@@ -68,10 +109,10 @@ export function useRealtimeAttendance(eventId, enabled = true) {
           });
 
             // Clean up timer from map
-            invalidateTimers.delete(eventId);
+            invalidateTimers.delete(cacheKey);
           }, 75); // 50-100ms is perfect: small enough to feel instant, large enough to collapse events
 
-          invalidateTimers.set(eventId, timer);
+          invalidateTimers.set(cacheKey, timer);
         }
       )
       .subscribe((status, err) => {
@@ -106,7 +147,7 @@ export function useRealtimeAttendance(eventId, enabled = true) {
       
       supabase.removeChannel(channel);
     };
-  }, [eventId, enabled, supabase, queryClient]);
+    }, [eventId, enabled, instanceDate, supabase, queryClient]);
 }
 
 /**

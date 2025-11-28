@@ -25,7 +25,7 @@ import * as Haptics from 'expo-haptics';
 
 const { width, height } = Dimensions.get('window');
 
-export default function QRCodeScanner({ visible, onClose, onScanSuccess, eventId, teamId }) {
+export default function QRCodeScanner({ visible, onClose, onScanSuccess, eventId, teamId, instanceDate = null }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -115,15 +115,79 @@ export default function QRCodeScanner({ visible, onClose, onScanSuccess, eventId
         return;
       }
 
-      // Verify event and team match
-      if (decoded.event_id !== eventId || decoded.team_id !== teamId) {
+      // Extract original event ID from instanceId if needed
+      // QR token contains original event_id, not instanceId
+      let originalEventId = eventId;
+      let expectedInstanceDate = instanceDate;
+      
+      if (eventId && eventId.includes(':')) {
+        // Instance ID format: "eventId:YYYY-MM-DD"
+        const parts = eventId.split(':');
+        originalEventId = parts[0];
+        if (!expectedInstanceDate && parts[1]) {
+          expectedInstanceDate = parts[1];
+        }
+      }
+      
+      // Verify event and team match (compare with original event ID)
+      if (decoded.event_id !== originalEventId || decoded.team_id !== teamId) {
+        if (Platform.OS === 'ios') {
+          await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        }
+        
+        console.error('❌ QR Event Mismatch:', {
+          decodedEventId: decoded.event_id,
+          originalEventId,
+          eventId,
+          decodedTeamId: decoded.team_id,
+          teamId,
+        });
+        
+        showAlert(
+          'Wrong Event',
+          'This QR code is for a different event. Please scan the correct QR code.',
+          () => {
+            setScanned(false);
+            setIsProcessing(false);
+          }
+        );
+        return;
+      }
+      
+      // For recurring events, verify instance_date matches
+      if (expectedInstanceDate) {
+        const decodedInstanceDate = decoded.instance_date || null;
+        if (decodedInstanceDate !== expectedInstanceDate) {
+          if (Platform.OS === 'ios') {
+            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          }
+          
+          console.error('❌ QR Instance Date Mismatch:', {
+            decodedInstanceDate,
+            expectedInstanceDate,
+            eventId,
+            originalEventId,
+          });
+          
+          showAlert(
+            'Wrong Event',
+            `This QR code is for a different occurrence of this event. Expected: ${expectedInstanceDate}, Got: ${decodedInstanceDate || 'none'}`,
+            () => {
+              setScanned(false);
+              setIsProcessing(false);
+            }
+          );
+          return;
+        }
+      } else if (decoded.instance_date) {
+        // Non-recurring event but QR code has instance_date
         if (Platform.OS === 'ios') {
           await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         }
         
         showAlert(
           'Wrong Event',
-          'This QR code is for a different event. Please scan the correct QR code.',
+          'This QR code is for a recurring event instance, but this is not a recurring event.',
           () => {
             setScanned(false);
             setIsProcessing(false);

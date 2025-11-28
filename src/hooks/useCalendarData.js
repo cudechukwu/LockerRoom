@@ -13,9 +13,11 @@ import {
   getUpcomingEvents,
   getTeamColors,
   getEventColor,
+  getEventExceptions,
 } from '../api/events';
 import { dataCache } from '../utils/dataCache';
 import { getTodayAnchor, normalizeDate, addDays, getEndOfDay } from '../utils/dateUtils';
+import { expandRecurringEvents } from '../utils/recurringEvents';
 
 const CALENDAR_VIEWS = {
   MONTH: 'month',
@@ -64,11 +66,48 @@ const useTeamContextIds = () => {
 
 const createEventsCacheKey = (teamId, currentView, dayKey) => `calendarEvents_${teamId}_${currentView}_${dayKey}`;
 
+// Extract recurring_days from description if stored there (workaround until backend adds column)
+const extractRecurringDaysFromDescription = (description) => {
+  if (!description || typeof description !== 'string') return null;
+  
+  const match = description.match(/RECURRING_DAYS_JSON:(\[.*?\])/);
+  if (match) {
+    try {
+      return JSON.parse(match[1]);
+    } catch (e) {
+      console.warn('Failed to parse recurring_days from description:', e);
+      return null;
+    }
+  }
+  return null;
+};
+
+// Clean description to remove RECURRING_DAYS_JSON marker before displaying
+const cleanDescription = (description) => {
+  if (!description || typeof description !== 'string') return description;
+  
+  // Remove RECURRING_DAYS_JSON marker and any surrounding whitespace/newlines
+  let cleaned = description.replace(/RECURRING_DAYS_JSON:\[.*?\]/g, '').trim();
+  
+  // Remove any double newlines or trailing newlines
+  cleaned = cleaned.replace(/\n\n+/g, '\n\n').replace(/\n+$/, '');
+  
+  return cleaned || null;
+};
+
 const buildEventPayload = (eventsData = [], teamColors = {}) =>
-  eventsData.map((event) => ({
+  eventsData.map((event) => {
+    // Extract recurring_days from description if available (workaround)
+    const recurringDaysFromDesc = extractRecurringDaysFromDescription(event.description);
+    const recurringDays = event.recurring_days || recurringDaysFromDesc || null;
+    
+    // Clean description to remove RECURRING_DAYS_JSON marker
+    const cleanedDescription = cleanDescription(event.description);
+    
+    return {
             id: event.id,
             title: event.title || '',
-            description: event.description || '',
+            description: cleanedDescription || '',
             eventType: event.event_type,
     event_type: event.event_type,
             startTime: new Date(event.start_time),
@@ -77,14 +116,19 @@ const buildEventPayload = (eventsData = [], teamColors = {}) =>
             color: event.color || getEventColor(event.event_type, teamColors),
             type: event.visibility === 'personal' ? 'personal' : 'team',
             isAllDay: event.is_all_day,
+            is_recurring: event.is_recurring,
             recurring: event.is_recurring,
+            recurring_pattern: event.recurring_pattern,
+            recurring_until: event.recurring_until ? new Date(event.recurring_until) : null,
+            recurring_days: recurringDays, // Array of day names/numbers (from DB or extracted from description)
             createdBy: event.created_by,
             attending: event.attending_count || 0,
             total: event.total_invited || 0,
     date: new Date(event.start_time),
-    notes: event.description || '',
+    notes: cleanedDescription || '', // Use cleaned description for notes too
     postTo: event.visibility === 'personal' ? 'Personal' : 'Team',
-  }));
+  };
+  });
 
 const fetchEventsByView = async (supabase, teamId, currentView, currentDate) => {
   if (!teamId || !currentDate || !supabase) return [];
@@ -112,6 +156,63 @@ const fetchEventsByView = async (supabase, teamId, currentView, currentDate) => 
   }
 };
 
+/**
+ * Fetch exceptions (deleted instances) for all recurring events
+ * Batches all exception fetches in parallel to avoid N+1 queries
+ * 
+ * @param {Object} supabase - Supabase client
+ * @param {Array<Object>} recurringEvents - Array of recurring event objects
+ * @returns {Map<string, Array<Date>>} Map of eventId -> array of deleted dates
+ */
+const fetchEventExceptions = async (supabase, recurringEvents) => {
+  if (!recurringEvents || recurringEvents.length === 0) {
+    return new Map();
+  }
+
+  try {
+    // Extract unique recurring event IDs
+    const recurringEventIds = [...new Set(
+      recurringEvents
+        .filter(event => event.is_recurring || event.recurring)
+        .map(event => event.id)
+    )];
+
+    if (recurringEventIds.length === 0) {
+      return new Map();
+    }
+
+    // Fetch exceptions for all recurring events in parallel
+    const exceptionPromises = recurringEventIds.map(async (eventId) => {
+      try {
+        const { data, error } = await getEventExceptions(supabase, eventId);
+        if (error) {
+          console.warn(`Failed to fetch exceptions for event ${eventId}:`, error);
+          return { eventId, exceptions: [] };
+        }
+        return { eventId, exceptions: data || [] };
+      } catch (error) {
+        console.warn(`Error fetching exceptions for event ${eventId}:`, error);
+        return { eventId, exceptions: [] };
+      }
+    });
+
+    const results = await Promise.all(exceptionPromises);
+    
+    // Build map: eventId -> array of deleted dates
+    const exceptionsMap = new Map();
+    results.forEach(({ eventId, exceptions }) => {
+      if (exceptions && exceptions.length > 0) {
+        exceptionsMap.set(eventId, exceptions);
+      }
+    });
+
+    return exceptionsMap;
+  } catch (error) {
+    console.error('Error fetching event exceptions:', error);
+    return new Map();
+  }
+};
+
 const fetchAndCacheEvents = async (supabase, teamId, currentView, currentDate, teamColors) => {
   if (!teamId || !currentDate || !supabase) return [];
 
@@ -130,8 +231,44 @@ const fetchAndCacheEvents = async (supabase, teamId, currentView, currentDate, t
 
   const eventsData = await fetchEventsByView(supabase, teamId, currentView, currentDate);
   const transformedEvents = buildEventPayload(eventsData, teamColors);
-  await cacheSet(cacheKey, transformedEvents, CACHE_TTL.SHORT);
-          return transformedEvents;
+  
+  // ⚡ LAZY EXPANSION: Only expand for visible range + buffer (not entire fetched range)
+  // This improves performance by avoiding expansion of events outside the visible area
+  let startDate, endDate;
+  switch (currentView) {
+    case CALENDAR_VIEWS.MONTH:
+      // Expand for current month + 1 month buffer on each side
+      startDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
+      endDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 2, 0, 23, 59, 59);
+      break;
+    case CALENDAR_VIEWS.WEEK: {
+      // Expand for current week + 1 week buffer on each side
+      const weekStart = new Date(currentDate);
+      weekStart.setDate(currentDate.getDate() - currentDate.getDay() - 7);
+      endDate = new Date(weekStart);
+      endDate.setDate(weekStart.getDate() + 20); // 3 weeks total
+      endDate.setHours(23, 59, 59);
+      startDate = weekStart;
+      break;
+    }
+    case CALENDAR_VIEWS.DAY:
+      // For day view, expand for a wider range to show recurring events
+      // Expand 3 months back and 6 months forward to show all recurring instances
+      startDate = addDays(currentDate, -90);
+      endDate = addDays(currentDate, 180);
+      break;
+    default:
+      startDate = currentDate;
+      endDate = currentDate;
+  }
+  
+  // Fetch exceptions for all recurring events (batch fetch to avoid N+1)
+  const exceptionsMap = await fetchEventExceptions(supabase, transformedEvents);
+  
+  // Expand recurring events with exceptions (deleted instances will be filtered out)
+  const expandedEvents = expandRecurringEvents(transformedEvents, startDate, endDate, exceptionsMap);
+  await cacheSet(cacheKey, expandedEvents, CACHE_TTL.SHORT);
+  return expandedEvents;
 };
 
 export function useTeamColors(supabase, teamId) {

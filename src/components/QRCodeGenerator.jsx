@@ -23,7 +23,7 @@ import { generateEventQRCode } from '../api/attendance';
 import { useSupabase } from '../providers/SupabaseProvider';
 import * as Haptics from 'expo-haptics';
 
-export default function QRCodeGenerator({ visible, onClose, eventId, eventName }) {
+export default function QRCodeGenerator({ visible, onClose, eventId, eventName, instanceDate = null, instanceEndTime = null }) {
   const supabase = useSupabase();
   const [qrToken, setQrToken] = useState(null);
   const [expiresAt, setExpiresAt] = useState(null);
@@ -39,7 +39,7 @@ export default function QRCodeGenerator({ visible, onClose, eventId, eventName }
       setExpiresAt(null);
       setError(null);
     }
-  }, [visible, eventId]);
+  }, [visible, eventId, instanceDate]);
 
   const loadQRCode = async () => {
     if (!supabase) {
@@ -51,7 +51,12 @@ export default function QRCodeGenerator({ visible, onClose, eventId, eventName }
     setError(null);
 
     try {
-      const { data, error: apiError } = await generateEventQRCode(supabase, eventId);
+      console.log('🔍 QRCodeGenerator - Generating QR code:', {
+        eventId,
+        instanceDate,
+      });
+      
+      const { data, error: apiError } = await generateEventQRCode(supabase, eventId, instanceDate, instanceEndTime);
 
       if (apiError) {
         throw apiError;

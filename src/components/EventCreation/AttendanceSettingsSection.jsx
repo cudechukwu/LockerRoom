@@ -39,12 +39,8 @@ const AttendanceSettingsSection = ({
 
   return (
     <View style={styles.container}>
-      <Text style={styles.sectionTitle}>Attendance Settings</Text>
-      
-      <View style={styles.card}>
         {/* Attendance Requirement */}
         <View style={styles.subsection}>
-          <Text style={styles.subsectionTitle}>Attendance Requirement</Text>
           <View style={styles.radioGroup}>
             {requirementOptions.map((option) => {
               const isSelected = attendanceRequirement === option.value;
@@ -75,7 +71,6 @@ const AttendanceSettingsSection = ({
 
         {/* Attendance Method */}
         <View style={styles.subsection}>
-          <Text style={styles.subsectionTitle}>Attendance Method</Text>
           <View style={styles.checkboxGroup}>
             {methodOptions.map((option) => {
               const isSelected = checkInMethods.includes(option.value);
@@ -101,7 +96,6 @@ const AttendanceSettingsSection = ({
                 </TouchableOpacity>
               );
             })}
-          </View>
         </View>
       </View>
     </View>
@@ -110,27 +104,10 @@ const AttendanceSettingsSection = ({
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    ...TYPOGRAPHY.sectionTitle,
-    marginBottom: 12,
-  },
-  card: {
-    backgroundColor: COLORS.BACKGROUND_CARD,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 0,
+    marginBottom: 0,
   },
   subsection: {
     marginBottom: 16,
-  },
-  subsectionTitle: {
-    ...TYPOGRAPHY.bodyMedium,
-    fontSize: scaleFont(FONT_SIZES.SM),
-    fontWeight: FONT_WEIGHTS.MEDIUM,
-    color: COLORS.TEXT_SECONDARY,
-    marginBottom: 12,
   },
   divider: {
     height: 1,
